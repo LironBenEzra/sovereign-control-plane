@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Runtime state: audit log, policy snapshots and keys are generated on first run.
+data/
+
+# Secrets
+.env
+
+# UI
+ui/node_modules/
+ui/dist/
+
+# Tooling
+.playwright-mcp/
+.DS_Store

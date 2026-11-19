@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-control-plane"
+version = "0.1.0"
+description = "A sovereign control plane that enforces private-data policy in front of AI models and records tamper-evident evidence."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "cryptography>=43",
+    "httpx>=0.27",
+    "presidio-analyzer>=2.2.360,<2.3",
+    "anthropic>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pytest>=8",
+    "types-PyYAML",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF", "PL"]
+ignore = [
+    "PLR2004", # magic values are fine in tests and thresholds
+    "PLR0913", # the pipeline's composition root legitimately takes several collaborators
+]
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "presidio: needs the spaCy model installed (real Presidio analyzer)",
+]

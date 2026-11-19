@@ -1,0 +1,106 @@
+# Sovereign control plane policy.
+#
+# This file is the only place rules live. It is re-read on every request, so an edit
+# takes effect immediately. Every audit record names the SHA-256 of the exact text that
+# was in force, and a copy of each version is kept under data/policies/.
+#
+# If this file is missing or invalid, every request is blocked until it is fixed.
+
+id: default-sovereign-policy
+version: "1.0.0"
+description: Keep secrets out of every model, keep regulated data in the boundary, redact contact PII.
+
+# What counts as private data: category -> entity types the detectors look for.
+# An entity type that is not listed here is not looked for.
+categories:
+  secret:
+    - PRIVATE_KEY
+    - AWS_ACCESS_KEY
+    - GITHUB_TOKEN
+    - SLACK_TOKEN
+    - API_KEY
+    - JWT
+    - CONNECTION_STRING
+    - CREDENTIAL_ASSIGNMENT
+  possible_secret:
+    - HIGH_ENTROPY_STRING
+  government_id:
+    - US_SSN
+    - US_PASSPORT
+    - US_ITIN
+  financial:
+    - CREDIT_CARD
+    - IBAN_CODE
+  health:
+    - MEDICAL_LICENSE
+    - HEALTH_CONTEXT
+  pii:
+    - PERSON
+    - EMAIL_ADDRESS
+    - PHONE_NUMBER
+    - IP_ADDRESS
+    # LOCATION is left out on purpose: the NER model tags every country and city, so
+    # "What is the capital of France?" would be redacted. Add it here to turn it on.
+
+detection:
+  # Findings scoring below this are ignored as noise.
+  min_score: 0.35
+  # If every finding is below this, the classification is "uncertain".
+  confident_score: 0.6
+
+# Rules are checked top to bottom. The first rule that matches wins.
+rules:
+  - id: block-secrets
+    description: Credentials and secrets are never sent to any model.
+    when:
+      any_category: [secret]
+    action: block
+
+  - id: keep-regulated-in-boundary
+    description: Regulated data (government IDs, financial, health) is answered by the sovereign model only.
+    when:
+      any_category: [government_id, financial, health]
+    action: route_sovereign
+
+  - id: keep-possible-secrets-in-boundary
+    description: A high-entropy string may be a credential, so the prompt stays in the boundary.
+    when:
+      any_category: [possible_secret]
+    action: route_sovereign
+
+  - id: protect-when-unsure
+    description: Detection failed or found only low-confidence evidence, so the prompt is treated as private.
+    when:
+      label: [unknown_assume_private, uncertain]
+    action: route_sovereign
+
+  - id: redact-pii
+    description: Personal data is replaced with placeholders before the prompt leaves the boundary.
+    when:
+      any_category: [pii]
+    action: redact
+
+  - id: allow-clean
+    description: No private data was found, so the prompt may go to the external model.
+    when:
+      label: [no_private_data]
+    action: allow
+
+# Applies when no rule matches. Must be block or route_sovereign.
+default_action: block
+
+egress:
+  # Default deny. A prompt leaves the boundary only if a rule says allow or redact
+  # AND the destination is listed here. Remove an entry to cut that destination off.
+  allowed_destinations:
+    - anthropic
+    # The labelled stand-in used when no ANTHROPIC_API_KEY is set.
+    - stub-external
+
+response:
+  # Categories removed from a model's answer before it is returned to the caller.
+  redact_categories: [secret]
+  # After "redact", put the original values back into the answer, inside the boundary.
+  restore_placeholders: true
+
+block_message: This request was blocked by the data protection policy. No model was called.

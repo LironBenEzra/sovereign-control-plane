@@ -1,0 +1,80 @@
+"""The external model: Anthropic's Claude API, outside the trust boundary.
+
+This provider is only ever reached through the egress gateway.
+"""
+
+from __future__ import annotations
+
+import anthropic
+from anthropic.types import Message
+from anthropic.types.beta import BetaMessage
+
+from control_plane.providers.base import ModelReply, ProviderError, ProviderStatus
+
+_MAX_TOKENS = 16000
+_EFFORT = "medium"
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_REFUSAL_TEXT = "The external model declined to answer this request."
+
+
+class AnthropicProvider:
+    name = "anthropic"
+    in_boundary = False
+    is_stub = False
+
+    def __init__(
+        self,
+        model: str,
+        timeout_s: float,
+        refusal_fallback: bool,
+        api_key: str | None = None,
+        client: anthropic.Anthropic | None = None,
+    ) -> None:
+        self.model = model
+        self._refusal_fallback = refusal_fallback
+        # With no key given, the SDK resolves credentials from the environment itself.
+        self._client = client or anthropic.Anthropic(
+            api_key=api_key, timeout=timeout_s, max_retries=2
+        )
+
+    def generate(self, prompt: str) -> ModelReply:
+        try:
+            response = self._create(prompt)
+        except anthropic.APIConnectionError as exc:  # includes timeouts
+            raise ProviderError("connection") from exc
+        except anthropic.RateLimitError as exc:
+            raise ProviderError("rate_limited") from exc
+        except anthropic.APIStatusError as exc:
+            raise ProviderError(f"http_{exc.status_code}") from exc
+
+        if response.stop_reason == "refusal":
+            return ModelReply(text=_REFUSAL_TEXT, served_by=response.model, note="refusal")
+
+        text = "".join(block.text for block in response.content if block.type == "text")
+        note = "truncated" if response.stop_reason == "max_tokens" else None
+        return ModelReply(text=text, served_by=response.model, note=note)
+
+    def _create(self, prompt: str) -> Message | BetaMessage:
+        messages: list[anthropic.types.MessageParam] = [{"role": "user", "content": prompt}]
+        if not self._refusal_fallback:
+            return self._client.messages.create(
+                model=self.model,
+                max_tokens=_MAX_TOKENS,
+                output_config={"effort": _EFFORT},
+                messages=messages,
+            )
+        # If a safety classifier declines the request, Anthropic re-runs it on a
+        # fallback model inside the same call. The destination does not change, and
+        # `response.model` (recorded as evidence) says which model answered.
+        return self._client.beta.messages.create(
+            model=self.model,
+            max_tokens=_MAX_TOKENS,
+            output_config={"effort": _EFFORT},
+            betas=[_FALLBACK_BETA],
+            fallbacks="default",
+            messages=messages,  # type: ignore[arg-type]
+        )
+
+    def status(self) -> ProviderStatus:
+        # No probe call: a health check must not send anything outside the boundary.
+        return ProviderStatus(ready=True, detail=f"configured for {self.model}, not probed")
