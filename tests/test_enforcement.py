@@ -66,3 +66,13 @@ def test_restore_puts_originals_back_and_counts_them() -> None:
 
     assert restored == "Sure. Dana can be reached at dana@example.com. Bye Dana."
     assert count == 3
+
+
+def test_restore_is_a_single_pass() -> None:
+    # A restored value that looks like another placeholder must not be replaced again.
+    placeholders = {"<PERSON_1>": "<PERSON_2>", "<PERSON_2>": "Omar"}
+
+    restored, count = restore("<PERSON_1> met <PERSON_2>", placeholders)
+
+    assert restored == "<PERSON_2> met Omar"
+    assert count == 2

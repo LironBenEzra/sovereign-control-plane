@@ -78,7 +78,9 @@ def _sovereign(settings: Settings) -> ModelProvider:
 
 
 def _external(settings: Settings) -> ModelProvider:
-    key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
+    # An empty variable (as Compose passes when no key is set) means no key.
+    secret = settings.anthropic_api_key
+    key = (secret.get_secret_value() if secret else "") or None
     use_anthropic = settings.external_provider == "anthropic" or (
         settings.external_provider == "auto" and key
     )
@@ -94,4 +96,5 @@ def _external(settings: Settings) -> ModelProvider:
 
 def create_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     return create_api(build_services(Settings()))

@@ -46,6 +46,8 @@ class AnthropicProvider:
             raise ProviderError("rate_limited") from exc
         except anthropic.APIStatusError as exc:
             raise ProviderError(f"http_{exc.status_code}") from exc
+        except anthropic.APIError as exc:
+            raise ProviderError("api_error") from exc
 
         if response.stop_reason == "refusal":
             return ModelReply(text=_REFUSAL_TEXT, served_by=response.model, note="refusal")
@@ -55,13 +57,12 @@ class AnthropicProvider:
         return ModelReply(text=text, served_by=response.model, note=note)
 
     def _create(self, prompt: str) -> Message | BetaMessage:
-        messages: list[anthropic.types.MessageParam] = [{"role": "user", "content": prompt}]
         if not self._refusal_fallback:
             return self._client.messages.create(
                 model=self.model,
                 max_tokens=_MAX_TOKENS,
                 output_config={"effort": _EFFORT},
-                messages=messages,
+                messages=[{"role": "user", "content": prompt}],
             )
         # If a safety classifier declines the request, Anthropic re-runs it on a
         # fallback model inside the same call. The destination does not change, and
@@ -72,7 +73,7 @@ class AnthropicProvider:
             output_config={"effort": _EFFORT},
             betas=[_FALLBACK_BETA],
             fallbacks="default",
-            messages=messages,  # type: ignore[arg-type]
+            messages=[{"role": "user", "content": prompt}],
         )
 
     def status(self) -> ProviderStatus:

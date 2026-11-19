@@ -71,17 +71,26 @@ class AuditLog:
     def append(self, event: str, audit_id: str, body: Mapping[str, Any]) -> AuditRecord:
         """Write one record and fsync it before returning."""
         with self._lock:
-            unsigned = {
-                "seq": self._next_seq,
-                "ts": self._clock().isoformat(timespec="microseconds"),
+            seq = self._next_seq
+            ts = self._clock().isoformat(timespec="microseconds")
+            content = dict(body)
+            digest = record_digest(
+                {
+                    "seq": seq,
+                    "ts": ts,
+                    "event": event,
+                    "audit_id": audit_id,
+                    "body": content,
+                    "prev_hash": self._head_hash,
+                }
+            )
+            record: AuditRecord = {
+                "seq": seq,
+                "ts": ts,
                 "event": event,
                 "audit_id": audit_id,
-                "body": dict(body),
+                "body": content,
                 "prev_hash": self._head_hash,
-            }
-            digest = record_digest(unsigned)
-            record: AuditRecord = {
-                **unsigned,  # type: ignore[typeddict-item]
                 "hash": digest,
                 "sig": sign_digest(self._key, digest),
                 "key_id": self._key_id,

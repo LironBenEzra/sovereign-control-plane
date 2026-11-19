@@ -34,6 +34,10 @@ class DetectorRunner:
 
     Detectors are independent: if one raises or times out, the findings of the others
     still count, and the failed one is recorded so classification can fail closed.
+
+    A detector that times out keeps running in its worker thread (Python cannot kill
+    it) and its late result is discarded. If enough of them hang, later runs time out
+    waiting for a worker, which again fails closed.
     """
 
     def __init__(self, detectors: Sequence[Detector], timeout_s: float) -> None:

@@ -12,9 +12,11 @@ class OllamaProvider:
     in_boundary = True
     is_stub = False
 
-    def __init__(self, base_url: str, model: str, timeout_s: float) -> None:
+    def __init__(
+        self, base_url: str, model: str, timeout_s: float, client: httpx.Client | None = None
+    ) -> None:
         self.model = model
-        self._client = httpx.Client(base_url=base_url, timeout=timeout_s)
+        self._client = client or httpx.Client(base_url=base_url, timeout=timeout_s)
 
     def generate(self, prompt: str) -> ModelReply:
         try:

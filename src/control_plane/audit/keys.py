@@ -36,17 +36,17 @@ def load_or_create_signing_key(key_dir: Path) -> Ed25519PrivateKey:
         key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
         if not isinstance(key, Ed25519PrivateKey):
             raise ValueError(f"{private_path} is not an Ed25519 private key")
-        return key
-
-    key = Ed25519PrivateKey.generate()
-    _write_private(
-        private_path,
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        ),
-    )
+    else:
+        key = Ed25519PrivateKey.generate()
+        _write_private(
+            private_path,
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ),
+        )
+    # Written on every start, so the verifier always finds the key that matches.
     (key_dir / PUBLIC_KEY_FILE).write_bytes(
         key.public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo

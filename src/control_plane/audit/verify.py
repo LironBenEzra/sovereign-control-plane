@@ -143,7 +143,11 @@ def replay_decisions(records: Sequence[dict[str, Any]], policy_dir: Path, report
     for record in records[: report.records]:
         if record["event"] != EVENT_DECISION:
             continue
-        problem = _replay_one(record, policy_dir)
+        try:
+            problem = _replay_one(record, policy_dir)
+        except (KeyError, TypeError, ValueError):
+            # Possible only if someone holding the signing key wrote a broken record.
+            problem = "record body is malformed and cannot be replayed"
         report.replayed += 1
         if problem:
             report.replay_problems.append(Problem(record["seq"], problem))
@@ -223,6 +227,13 @@ def _print_report(report: Report) -> None:
     print("RESULT: " + ("OK - the log is intact" if report.ok else "FAILED"))
 
 
+def _receipt(value: str) -> tuple[int, str]:
+    seq, separator, digest = value.partition(":")
+    if not separator or not seq.isdigit() or len(digest) != 64:
+        raise argparse.ArgumentTypeError("expected SEQ:HASH, for example 12:4ee6843e...")
+    return int(seq), digest
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify the control plane's audit log.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -233,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--receipt",
         action="append",
         default=[],
+        type=_receipt,
         metavar="SEQ:HASH",
         help="a receipt returned by the API; may be given more than once",
     )
@@ -246,9 +258,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     receipt_failures: list[str] = []
     if args.receipt:
         records, _ = parse_lines(log_path.read_text(encoding="utf-8").splitlines())
-        for receipt in args.receipt:
-            seq, _, digest = receipt.partition(":")
-            if problem := receipt_problem(records, int(seq), digest):
+        for seq, digest in args.receipt:
+            if problem := receipt_problem(records, seq, digest):
                 receipt_failures.append(problem)
 
     if args.json:

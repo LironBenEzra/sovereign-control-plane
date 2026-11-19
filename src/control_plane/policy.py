@@ -175,7 +175,9 @@ def decide(classification: Classification, policy: Policy) -> Decision:
             action=rule.action,
             rule_id=rule.id,
             rationale=rule.description or f"Rule '{rule.id}' matched.",
-            fail_closed=unsure,
+            # A policy may choose to send uncertain prompts out. That is its right,
+            # but the evidence must not label it as a protective decision.
+            fail_closed=unsure and rule.action not in _EXTERNAL_ACTIONS,
         )
 
     return Decision(

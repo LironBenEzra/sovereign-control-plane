@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+data
+docs
+tests
+**/__pycache__
+**/*.egg-info
+.pytest_cache
+.ruff_cache
+.playwright-mcp
+ui/node_modules
+ui/dist

@@ -144,6 +144,72 @@ class _Enforcement:
     response: str | None = None
 
 
+@dataclass(frozen=True)
+class _Attempt:
+    """One model call made for a decision, and the evidence it leaves behind."""
+
+    decision: Decision
+    provider: ModelProvider
+    payload: str
+    redaction: Redaction | None
+    started: float
+
+    @property
+    def external(self) -> bool:
+        return not self.provider.in_boundary
+
+    def outcome(
+        self,
+        status: OutcomeStatus,
+        reason: str | None,
+        *,
+        sent: bool,
+        denied_reason: str | None = None,
+        reply: ModelReply | None = None,
+        error: str | None = None,
+        placeholders_restored: int | None = None,
+        response: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the outcome record. `sent` is true once the call to the model started."""
+        model = {
+            **vars(ModelUse.of(self.provider)),
+            "called": sent,
+            "served_by": reply.served_by if reply else None,
+            "note": reply.note if reply else None,
+            "error": error,
+            "latency_ms": _elapsed_ms(self.started) if sent else None,
+        }
+        egress = None
+        if self.external:
+            egress = {
+                "destination": self.provider.name,
+                # A plain hash on purpose: it can be matched against the provider's own logs.
+                "payload_sha256": hashlib.sha256(self.payload.encode()).hexdigest(),
+                "payload_chars": len(self.payload),
+                "allowed": sent,
+                "denied_reason": denied_reason,
+                # True even if the call then failed: the payload may have left before
+                # the error, and the evidence must not claim otherwise.
+                "attempted": sent,
+            }
+        redaction = None
+        if self.redaction is not None:
+            redaction = {
+                "spans": self.redaction.span_count,
+                "by_entity": self.redaction.by_entity,
+                "placeholders_restored": placeholders_restored,
+            }
+        return _outcome(
+            self.decision,
+            status,
+            reason,
+            redaction=redaction,
+            model=model,
+            egress=egress,
+            response=response,
+        )
+
+
 class _OutputScanFailedError(Exception):
     pass
 
@@ -287,39 +353,21 @@ class ControlPlane:
             redact(text, classification.counted) if decision.action is Action.REDACT else None
         )
         payload = redaction.text if redaction else text
-        model: dict[str, Any] = {**vars(ModelUse.of(provider)), "called": False}
-        egress: dict[str, Any] | None = (
-            {
-                "destination": self._egress.destination,
-                # A plain hash on purpose: it can be matched against the provider's own logs.
-                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
-                "payload_chars": len(payload),
-                "allowed": False,
-                "attempted": False,
-            }
-            if external
-            else None
-        )
-        redaction_evidence = _redaction_evidence(redaction)
-        parts = {"redaction": redaction_evidence, "model": model, "egress": egress}
+        attempt = _Attempt(decision, provider, payload, redaction, started=time.monotonic())
+        used = ModelUse.of(provider)
 
-        started = time.monotonic()
         try:
             reply = self._call(payload, decision, policy, external)
         except EgressDeniedError as exc:
-            reason = f"egress_denied:{exc.reason}"
+            status, reason = OutcomeStatus.BLOCKED, f"egress_denied:{exc.reason}"
             return _Enforcement(
-                status=OutcomeStatus.BLOCKED,
+                status=status,
                 reason=reason,
-                evidence=_outcome(decision, OutcomeStatus.BLOCKED, reason, **parts),
+                evidence=attempt.outcome(status, reason, sent=False, denied_reason=exc.reason),
                 response=_EGRESS_DENIED_MESSAGE,
             )
         except ProviderError as exc:
-            model |= {"called": True, "error": exc.kind, "latency_ms": _elapsed_ms(started)}
-            if egress is not None:
-                # The gateway let it through and the call started, so the payload may
-                # have left even though no answer came back.
-                egress |= {"allowed": True, "attempted": True}
+            if external:
                 status, reason = OutcomeStatus.FAILED, f"external_model_error:{exc.kind}"
                 response = None
             else:
@@ -329,58 +377,57 @@ class ControlPlane:
             return _Enforcement(
                 status=status,
                 reason=reason,
-                evidence=_outcome(decision, status, reason, **parts),
-                model=ModelUse.of(provider),
+                evidence=attempt.outcome(status, reason, sent=True, error=exc.kind),
+                model=used,
                 forwarded_prompt=payload if external else None,
                 response=response,
             )
 
-        model |= {
-            "called": True,
-            "served_by": reply.served_by,
-            "note": reply.note,
-            "latency_ms": _elapsed_ms(started),
-        }
-        if egress is not None:
-            egress |= {"allowed": True, "attempted": True}
-
         try:
             output, scan = self._scan_output(reply.text, policy)
         except _OutputScanFailedError:
-            reason = "output_scan_failed"
+            status, reason = OutcomeStatus.WITHHELD, "output_scan_failed"
             return _Enforcement(
-                status=OutcomeStatus.WITHHELD,
+                status=status,
                 reason=reason,
-                evidence=_outcome(decision, OutcomeStatus.WITHHELD, reason, **parts),
-                model=ModelUse.of(provider),
+                evidence=attempt.outcome(status, reason, sent=True, reply=reply),
+                model=used,
                 forwarded_prompt=payload,
             )
 
-        restore_wanted = policy.document.response.restore_placeholders
-        if redaction and redaction_evidence is not None and restore_wanted:
+        restored = None
+        if redaction and policy.document.response.restore_placeholders:
             output, restored = restore(output, redaction.placeholders)
-            redaction_evidence["placeholders_restored"] = restored
 
-        response_evidence = {
-            "hmac": keyed_hash(self._hmac_key, output),
-            "chars": len(output),
-            **scan,
-        }
         return _Enforcement(
             status=OutcomeStatus.COMPLETED,
             reason=None,
-            evidence=_outcome(
-                decision, OutcomeStatus.COMPLETED, None, response=response_evidence, **parts
+            evidence=attempt.outcome(
+                OutcomeStatus.COMPLETED,
+                None,
+                sent=True,
+                reply=reply,
+                placeholders_restored=restored,
+                response={"hmac": keyed_hash(self._hmac_key, output), "chars": len(output), **scan},
             ),
-            model=ModelUse.of(provider),
+            model=used,
             forwarded_prompt=payload,
             response=output,
         )
 
     def _call(self, payload: str, decision: Decision, policy: Policy, external: bool) -> ModelReply:
-        if external:
-            return self._egress.send(payload, decision, policy)
-        return self._sovereign.generate(payload)
+        try:
+            if external:
+                return self._egress.send(payload, decision, policy)
+            return self._sovereign.generate(payload)
+        except (EgressDeniedError, ProviderError):
+            raise
+        except Exception as exc:
+            # Deliberately broad. A provider SDK raised something it does not document.
+            # Treating it as a failed call means the outcome record is still written,
+            # and it says the call was attempted.
+            logger.error("model call raised an unexpected %s", type(exc).__name__)
+            raise ProviderError(f"unexpected_{type(exc).__name__}") from exc
 
     def _scan_output(self, text: str, policy: Policy) -> tuple[str, dict[str, Any]]:
         """Inspect the model's answer with the same detectors and apply response rules."""
@@ -477,12 +524,6 @@ def _outcome(
         "egress": egress,
         "response": response,
     }
-
-
-def _redaction_evidence(redaction: Redaction | None) -> dict[str, Any] | None:
-    if redaction is None:
-        return None
-    return {"spans": redaction.span_count, "by_entity": redaction.by_entity}
 
 
 def _elapsed_ms(started: float) -> int:

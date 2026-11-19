@@ -89,6 +89,15 @@ def test_detection_failure_can_never_leave_the_boundary() -> None:
     assert decision.fail_closed
 
 
+def test_a_rule_that_sends_uncertain_prompts_out_is_not_labelled_fail_closed() -> None:
+    policy = policy_with(rules=[{"id": "allow-all", "action": "allow"}])
+
+    decision = decide(classification(Label.UNCERTAIN, "pii"), policy)
+
+    assert decision.action is Action.ALLOW
+    assert not decision.fail_closed
+
+
 @pytest.mark.parametrize(
     "broken",
     [

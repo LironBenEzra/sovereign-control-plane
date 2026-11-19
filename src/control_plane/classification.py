@@ -10,13 +10,15 @@ from control_plane.policy import Policy
 
 def classify(signals: Signals, policy: Policy) -> Classification:
     thresholds = policy.document.detection
-    counted = tuple(
-        finding
-        for finding in signals.findings
-        if finding.score >= thresholds.min_score
-        and policy.category_of(finding.entity_type) is not None
-    )
-    categories = tuple(sorted({policy.category_of(f.entity_type) or "" for f in counted}))
+    kept: list[Finding] = []
+    kept_categories: set[str] = set()
+    for finding in signals.findings:
+        category = policy.category_of(finding.entity_type)
+        if category is not None and finding.score >= thresholds.min_score:
+            kept.append(finding)
+            kept_categories.add(category)
+    counted = tuple(kept)
+    categories = tuple(sorted(kept_categories))
     found = _describe(counted)
 
     failed = sorted(run.name for run in signals.detectors if not run.ok)

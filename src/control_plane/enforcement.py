@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -59,12 +60,15 @@ def redact(text: str, findings: Sequence[Finding]) -> Redaction:
 
 
 def restore(text: str, placeholders: Mapping[str, str]) -> tuple[str, int]:
-    """Put original values back in place of placeholders. Returns the text and the count."""
-    restored = 0
-    for placeholder, original in placeholders.items():
-        restored += text.count(placeholder)
-        text = text.replace(placeholder, original)
-    return text, restored
+    """Put original values back in place of placeholders. Returns the text and the count.
+
+    Done in a single pass, so a restored value that happens to look like another
+    placeholder is not substituted a second time.
+    """
+    if not placeholders:
+        return text, 0
+    pattern = re.compile("|".join(re.escape(placeholder) for placeholder in placeholders))
+    return pattern.subn(lambda match: placeholders[match.group()], text)
 
 
 def _merge(findings: Sequence[Finding]) -> list[_Span]:

@@ -174,11 +174,8 @@ def test_anthropic_errors_become_short_codes(error: Exception, kind: str) -> Non
 
 
 def ollama(handler: Any) -> OllamaProvider:
-    provider = OllamaProvider("http://ollama.test", "llama3.2:1b", timeout_s=5)
-    provider._client = httpx.Client(
-        base_url="http://ollama.test", transport=httpx.MockTransport(handler)
-    )
-    return provider
+    client = httpx.Client(base_url="http://ollama.test", transport=httpx.MockTransport(handler))
+    return OllamaProvider("http://ollama.test", "llama3.2:1b", timeout_s=5, client=client)
 
 
 def test_ollama_returns_the_answer_and_asks_for_deterministic_sampling() -> None:

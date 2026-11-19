@@ -10,6 +10,7 @@ from control_plane.audit.chain import INVALID_REQUEST_RULE_ID, POLICY_UNAVAILABL
 from control_plane.detection.rules import RuleDetector
 from control_plane.models import Action, Label, OutcomeStatus
 from control_plane.pipeline import EvidenceUnavailableError, normalize_prompt
+from control_plane.providers.base import ModelReply
 from tests.conftest import (
     AWS_KEY,
     DEFAULT_POLICY_PATH,
@@ -210,8 +211,10 @@ def test_a_destination_missing_from_the_allowlist_is_refused(
         "payload_sha256": hashlib.sha256(CLEAN.encode()).hexdigest(),
         "payload_chars": len(CLEAN),
         "allowed": False,
+        "denied_reason": "destination_not_allowlisted",
         "attempted": False,
     }
+    assert outcome["body"]["model"]["called"] is False
 
 
 def test_external_model_failure_is_recorded_as_an_attempted_egress(
@@ -230,21 +233,36 @@ def test_external_model_failure_is_recorded_as_an_attempted_egress(
 
 
 def test_a_failed_output_scan_withholds_the_answer(make_harness: HarnessFactory) -> None:
-    detector = KeywordDetector()
+    # The detector works on the prompt and fails on the model's answer.
+    detector = KeywordDetector(fail_when=lambda text: text.startswith("echo:"))
     harness = make_harness(detectors=[detector])
-    original_detect = detector.detect
-
-    def fail_on_model_output(text: str, entity_types: object) -> list:
-        if text.startswith("echo:"):
-            raise RuntimeError("scanner crashed")
-        return original_detect(text, entity_types)  # type: ignore[arg-type]
-
-    detector.detect = fail_on_model_output  # type: ignore[method-assign]
 
     result = harness.plane.handle(CLEAN)
 
     assert result.status is OutcomeStatus.WITHHELD
     assert result.response is None
+    (outcome,) = harness.records("outcome")
+    assert outcome["body"]["model"]["called"] is True
+    assert outcome["body"]["response"] is None
+
+
+def test_an_unexpected_provider_exception_still_leaves_an_outcome_record(
+    make_harness: HarnessFactory,
+) -> None:
+    class Exploding(FakeProvider):
+        def generate(self, prompt: str) -> ModelReply:
+            self.prompts.append(prompt)
+            raise ZeroDivisionError("a bug in a provider SDK")
+
+    harness = make_harness(external=Exploding("anthropic", in_boundary=False))
+
+    result = harness.plane.handle(CLEAN)
+
+    assert result.status is OutcomeStatus.FAILED
+    assert result.reason == "external_model_error:unexpected_ZeroDivisionError"
+    (outcome,) = harness.records("outcome")
+    assert outcome["body"]["egress"]["attempted"] is True
+    assert harness.verify().incomplete == []
 
 
 def test_secrets_in_a_model_answer_are_removed(make_harness: HarnessFactory) -> None:

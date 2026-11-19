@@ -1,0 +1,56 @@
+# One command:  docker compose up --build
+# Then open     http://localhost:8000
+#
+# Everything in this file is inside the trust boundary. The only way out is the
+# control plane's egress gateway, and only when the policy allows it.
+
+name: sovereign-control-plane
+
+services:
+  control-plane:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      SCP_SOVEREIGN_PROVIDER: ${SCP_SOVEREIGN_PROVIDER:-ollama}
+      SCP_OLLAMA_URL: http://ollama:11434
+      SCP_SOVEREIGN_MODEL: ${SCP_SOVEREIGN_MODEL:-llama3.2:1b}
+      SCP_EXTERNAL_PROVIDER: ${SCP_EXTERNAL_PROVIDER:-auto}
+      SCP_EXTERNAL_MODEL: ${SCP_EXTERNAL_MODEL:-claude-opus-5-5}
+      # Optional. Put it in a .env file next to this one. Without a key the external
+      # model is a stub that is labelled as a stub in every audit record.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      # Edit policy/policy.yaml on the host: it takes effect on the next request.
+      - ./policy:/app/policy:ro
+      # Audit log, policy snapshots and keys.
+      - scp-data:/app/data
+    depends_on:
+      - ollama
+
+  # The sovereign model. No port is published: it is reachable only from inside
+  # this Compose network.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+
+  # Pulls the sovereign model once, then exits. Until it finishes, requests that must
+  # stay in the boundary are blocked (fail closed), not sent anywhere else.
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      MODEL: ${SCP_SOVEREIGN_MODEL:-llama3.2:1b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        ollama pull "$$MODEL"
+    restart: "no"
+
+volumes:
+  scp-data:
+  ollama-models:

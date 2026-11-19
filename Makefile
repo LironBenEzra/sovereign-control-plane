@@ -12,6 +12,8 @@ help:
 	@echo "make demo         send the sample requests to a running control plane"
 	@echo "make verify       verify the audit log: chain, signatures, replay"
 	@echo "make tamper-demo  edit a copy of the audit log and show the verifier catching it"
+	@echo "                  (verify and tamper-demo run inside the container; add LOCAL=1"
+	@echo "                   to run them against ./data after 'make dev')"
 
 up:
 	docker compose up --build
@@ -47,11 +49,21 @@ test:
 
 check: lint typecheck test
 
-verify:
-	$(PY) -m control_plane.audit.verify --data-dir data
+# The audit log lives in a Docker volume, so by default these run inside the container.
+# LOCAL=1 runs them against ./data instead, for use with `make dev`.
+ifdef LOCAL
+RUN := $(PY)
+DATA := data
+else
+RUN := docker compose exec control-plane python
+DATA := /app/data
+endif
 
-demo:
-	./scripts/demo.sh
+verify:
+	$(RUN) -m control_plane.audit.verify --data-dir $(DATA)
 
 tamper-demo:
-	$(PY) scripts/tamper_demo.py --data-dir data
+	$(RUN) scripts/tamper_demo.py --data-dir $(DATA)
+
+demo:
+	python3 scripts/demo.py

@@ -59,10 +59,12 @@ class KeywordDetector:
         name: str = "fake-pii",
         error: Exception | None = None,
         delay_s: float = 0.0,
+        fail_when: Callable[[str], bool] | None = None,
     ) -> None:
         self.name = name
         self._known = known
         self.error = error
+        self._fail_when = fail_when
         self._delay_s = delay_s
         self.calls: list[str] = []
 
@@ -72,6 +74,8 @@ class KeywordDetector:
             time.sleep(self._delay_s)
         if self.error is not None:
             raise self.error
+        if self._fail_when is not None and self._fail_when(text):
+            raise RuntimeError("detector failed on this text")
         findings = []
         for needle, (entity_type, score) in self._known.items():
             start = text.find(needle)
