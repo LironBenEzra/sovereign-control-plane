@@ -76,6 +76,8 @@ const CATEGORY_TONES: Record<string, Tone> = {
   government_id: "regulated",
   financial: "regulated",
   health: "regulated",
+  confidential_business: "regulated",
+  prompt_injection: "danger",
   pii: "pii",
 };
 
@@ -94,7 +96,7 @@ export const ACTION_SUMMARIES: Record<Action, string> = {
   allow: "Sent to the external model unchanged.",
   redact: "Private values replaced with placeholders, then sent to the external model.",
   block: "No model was called.",
-  route_sovereign: "Answered inside the trust boundary. Nothing was sent outside.",
+  route_sovereign: "Sent to the model inside the trust boundary. Nothing was sent outside.",
 };
 
 export const LABEL_TEXT: Record<Label, string> = {
@@ -112,7 +114,22 @@ export const OUTCOME_TEXT: Record<Outcome, string> = {
   withheld: "Answer withheld",
 };
 
-export const shortHash = (hash: string, length = 12) => `${hash.slice(0, length)}…`;
+export const shortHash = (hash: string, length = 12) =>
+  hash.length > length ? `${hash.slice(0, length)}…` : hash;
+
+/** Date and time, for periods longer than a day. */
+export function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? iso
+    : date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+}
 
 export function formatTime(iso: string): string {
   const date = new Date(iso);

@@ -18,6 +18,7 @@ from control_plane.detection.base import Detector, DetectorRunner
 from control_plane.detection.presidio import DETECTOR_NAME as PRESIDIO
 from control_plane.detection.presidio import PresidioDetector, UnavailableDetector
 from control_plane.detection.rules import RuleDetector
+from control_plane.detection.semantic import SemanticDetector
 from control_plane.egress import EgressGateway
 from control_plane.pipeline import ControlPlane
 from control_plane.policy import PolicyStore
@@ -31,6 +32,11 @@ logger = logging.getLogger(__name__)
 STUB_SOVEREIGN = "stub-sovereign"
 STUB_EXTERNAL = "stub-external"
 
+# Run once at startup, so /healthz reports a broken detector before the first request.
+# One entity type per detector, so each does real work.
+_SELF_CHECK_TEXT = "Startup self-check."
+_SELF_CHECK_TYPES = ("AWS_ACCESS_KEY", "PERSON")
+
 
 def build_services(settings: Settings) -> Services:
     key_dir = settings.data_dir / "keys"
@@ -38,12 +44,15 @@ def build_services(settings: Settings) -> Services:
         settings.data_dir / "audit" / "audit.jsonl", load_or_create_signing_key(key_dir)
     )
     policies = PolicyStore(settings.policy_path, settings.data_dir / "policies")
-    detectors: list[Detector] = [RuleDetector(), _presidio(settings)]
+    runner = DetectorRunner(_detectors(settings), settings.detection_timeout_s)
+    runner.run(_SELF_CHECK_TEXT, _SELF_CHECK_TYPES)
+    if failing := runner.failing():
+        logger.error("detectors failing at startup: %s", failing)
     sovereign = _sovereign(settings)
     egress = EgressGateway(_external(settings))
 
     control_plane = ControlPlane(
-        detectors=DetectorRunner(detectors, settings.detection_timeout_s),
+        detectors=runner,
         policies=policies,
         audit=audit,
         sovereign=sovereign,
@@ -57,16 +66,33 @@ def build_services(settings: Settings) -> Services:
         policies=policies,
         sovereign=sovereign,
         egress=egress,
-        detector_versions={d.name: d.version for d in detectors},
+        detectors=runner,
     )
+
+
+def _detectors(settings: Settings) -> list[Detector]:
+    detectors: list[Detector] = [RuleDetector(), _presidio(settings)]
+    if settings.sovereign_provider == "stub":
+        # Not in the list at all, so every audit record shows it did not run.
+        logger.warning(
+            "semantic detection is off: it needs Ollama, and the sovereign model is the stub"
+        )
+        return detectors
+    # Its HTTP timeout matches the detection budget, so a call the runner has given up on
+    # does not keep a worker thread busy for longer.
+    semantic = SemanticDetector(
+        settings.ollama_url, settings.sovereign_model, settings.detection_timeout_s
+    )
+    return [*detectors, semantic]
 
 
 def _presidio(settings: Settings) -> Detector:
     try:
         return PresidioDetector(settings.spacy_model)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         # Deliberately broad. If the NER model cannot load, the service must still
         # start and fail closed on every request, not crash and not run without it.
+        # SystemExit is included because spaCy calls sys.exit when a model download fails.
         logger.error("Presidio could not be loaded (%s); failing closed", type(exc).__name__)
         return UnavailableDetector(PRESIDIO, type(exc).__name__)
 

@@ -4,6 +4,7 @@ import pytest
 
 from control_plane.classification import classify
 from control_plane.detection.base import DetectorRunner
+from control_plane.detection.presidio import ModelNotInstalledError, PresidioDetector
 from control_plane.detection.rules import RuleDetector
 from control_plane.models import DetectorRun, Finding, Label, Signals
 from control_plane.policy import Policy
@@ -78,6 +79,23 @@ def test_private_key_span_covers_the_whole_block() -> None:
 
 
 # ---------------------------------------------------------------- runner
+
+
+def test_the_runner_reports_a_failing_detector_until_it_works_again() -> None:
+    flaky = KeywordDetector(name="presidio", fail_when=lambda text: "fail" in text)
+    runner = DetectorRunner([RuleDetector(), flaky], timeout_s=5.0)
+
+    runner.run("please fail", ["PERSON"])
+    assert runner.failing() == {"presidio": "RuntimeError"}
+
+    runner.run("all good", ["PERSON"])
+    assert runner.failing() == {}
+
+
+def test_a_missing_spacy_model_fails_fast_instead_of_downloading() -> None:
+    # Without the check, Presidio tries a download and spaCy exits the process.
+    with pytest.raises(ModelNotInstalledError):
+        PresidioDetector("not_an_installed_model")
 
 
 def test_a_failing_detector_does_not_hide_the_others() -> None:

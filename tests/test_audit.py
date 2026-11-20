@@ -12,6 +12,7 @@ from control_plane.audit.keys import keyed_hash, load_or_create_signing_key, sig
 from control_plane.audit.log import AuditIntegrityError, AuditLog
 from control_plane.audit.verify import main as verify_main
 from control_plane.audit.verify import parse_lines, receipt_problem, verify_chain
+from control_plane.evidence import signals_from_evidence
 from tests.conftest import EMAIL, PERSON, SSN, HarnessFactory
 
 
@@ -170,6 +171,67 @@ def test_an_outcome_without_a_decision_breaks_verification(
     log.append("outcome", "orphan", {})
 
     assert first_problem(log, key) == (0, "outcome without a decision")
+
+
+def test_a_request_ends_with_an_outcome_or_an_error(tmp_path: Path, key: Ed25519PrivateKey) -> None:
+    log = AuditLog(tmp_path / "audit.jsonl", key)
+    for event in ("received", "detection", "decision", "model_call", "outcome"):
+        log.append(event, "answered", {})
+    for event in ("received", "detection", "error"):
+        log.append(event, "failed", {})
+    log.append("received", "crashed-during-detection", {})
+    # Logs written before `received` existed start a request with its decision.
+    log.append("decision", "older-format", {})
+
+    report = verify_chain(read(log), key.public_key())
+
+    assert report.ok
+    assert report.incomplete == ["crashed-during-detection", "older-format"]
+
+
+@pytest.mark.parametrize(
+    ("events", "problem"),
+    [
+        (["detection"], "detection without a received record"),
+        (["model_call"], "model_call without a received record"),
+        (["error"], "error without a received record"),
+        (["received", "received"], "second received for one audit_id"),
+        (["received", "decision", "decision"], "second decision for one audit_id"),
+        (["received", "outcome"], "outcome without a decision"),
+        (["received", "decision", "error", "outcome"], "outcome without a decision"),
+    ],
+)
+def test_a_request_record_out_of_order_breaks_verification(
+    tmp_path: Path, key: Ed25519PrivateKey, events: list[str], problem: str
+) -> None:
+    log = AuditLog(tmp_path / "audit.jsonl", key)
+    for event in events:
+        log.append(event, "request", {})
+
+    assert first_problem(log, key) == (len(events) - 1, problem)
+
+
+def test_findings_from_older_records_with_a_value_hash_still_read_back() -> None:
+    # Records written before value_hmac was dropped must keep replaying.
+    older = {
+        "detectors": [{"name": "presidio", "version": "x", "ok": True, "error": None}],
+        "findings": [
+            {
+                "entity_type": "PERSON",
+                "start": 33,
+                "end": 42,
+                "score": 0.85,
+                "detector": "presidio",
+                "recognizer": "SpacyRecognizer",
+                "value_hmac": "3ee1ed75" * 8,
+            }
+        ],
+    }
+
+    (finding,) = signals_from_evidence(older).findings
+
+    assert (finding.entity_type, finding.start, finding.end) == ("PERSON", 33, 42)
+    assert finding.score == 0.85
 
 
 def test_keyed_hash_depends_on_the_key() -> None:

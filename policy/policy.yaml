@@ -7,8 +7,8 @@
 # If this file is missing or invalid, every request is blocked until it is fixed.
 
 id: default-sovereign-policy
-version: "1.0.0"
-description: Keep secrets out of every model, keep regulated data in the boundary, redact contact PII.
+version: "1.2.0"
+description: Keep secrets and prompt injections out of every model, keep regulated data and confidential business content in the boundary, redact contact PII.
 
 # What counts as private data: category -> entity types the detectors look for.
 # An entity type that is not listed here is not looked for.
@@ -41,6 +41,18 @@ categories:
     - IP_ADDRESS
     # LOCATION is left out on purpose: the NER model tags every country and city, so
     # "What is the capital of France?" would be redacted. Add it here to turn it on.
+  # Found by the semantic detector, a local model that judges what the text is about.
+  # A finding covers the passage it judged, not a single value. Remove a type to stop
+  # looking for it; with none listed, the model is not called at all.
+  confidential_business:
+    - UNRELEASED_PRODUCT
+    - INTERNAL_MEETING
+    - NONPUBLIC_FINANCIAL
+    - INTERNAL_CONFIDENTIAL
+  # Also found by the semantic detector: text that tries to control the AI system it is
+  # sent to (override its rules, reveal its instructions, hidden orders in a document).
+  prompt_injection:
+    - PROMPT_INJECTION
 
 detection:
   # Findings scoring below this are ignored as noise.
@@ -56,10 +68,22 @@ rules:
       any_category: [secret]
     action: block
 
+  - id: block-prompt-injection
+    description: Text that tries to take control of the AI system it is sent to is not sent to any model.
+    when:
+      any_category: [prompt_injection]
+    action: block
+
   - id: keep-regulated-in-boundary
     description: Regulated data (government IDs, financial, health) is answered by the sovereign model only.
     when:
       any_category: [government_id, financial, health]
+    action: route_sovereign
+
+  - id: keep-confidential-business-in-boundary
+    description: Non-public company information (unreleased products, internal meetings, non-public financials) is answered by the sovereign model only.
+    when:
+      any_category: [confidential_business]
     action: route_sovereign
 
   - id: keep-possible-secrets-in-boundary

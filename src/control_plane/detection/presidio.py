@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from importlib.metadata import version
 
+import spacy.util
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 
@@ -24,6 +25,10 @@ class PresidioDetector:
     name = DETECTOR_NAME
 
     def __init__(self, spacy_model: str) -> None:
+        if not spacy.util.is_package(spacy_model):
+            # Presidio would try to download a missing model: a call out of the boundary,
+            # and when the download fails spaCy exits the whole process.
+            raise ModelNotInstalledError(spacy_model)
         provider = NlpEngineProvider(
             nlp_configuration={
                 "nlp_engine_name": "spacy",
@@ -34,6 +39,7 @@ class PresidioDetector:
             nlp_engine=provider.create_engine(), supported_languages=[_LANGUAGE]
         )
         self._supported = frozenset(self._analyzer.get_supported_entities(_LANGUAGE))
+        self.entity_types = self._supported
         self.version = (
             f"presidio-analyzer {version('presidio-analyzer')} / "
             f"{spacy_model} {version(spacy_model)}"
@@ -70,6 +76,9 @@ class UnavailableDetector:
     log, instead of the process refusing to start or, worse, running with less detection.
     """
 
+    # It looks for nothing, so the policy editor does not offer its types while it is down.
+    entity_types: frozenset[str] = frozenset()
+
     def __init__(self, name: str, reason: str) -> None:
         self.name = name
         self.version = f"unavailable ({reason})"
@@ -80,3 +89,7 @@ class UnavailableDetector:
 
 class DetectorUnavailableError(Exception):
     pass
+
+
+class ModelNotInstalledError(Exception):
+    """The configured spaCy model is not installed in this environment."""

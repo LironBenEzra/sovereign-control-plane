@@ -1,0 +1,41 @@
+# Overrides for the hosted demo on one EC2 instance. Used by deploy/ec2.sh:
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.ec2.yml up -d --build
+#
+# Caddy is the only service with a published port. It serves HTTPS with a certificate it
+# obtains and renews itself, and passes requests to the control plane on the Compose
+# network. The external model stays the labelled stub: no API key is put on the server.
+
+services:
+  control-plane:
+    # Reachable only through Caddy.
+    ports: !reset []
+    environment:
+      # On 2 vCPUs the semantic detector's two questions take about 6.5 s for a short
+      # prompt and much longer for a long one. With 30 s, a 3,500-character prompt was
+      # judged and a 4,200-character one was treated as private.
+      SCP_DETECTION_TIMEOUT_S: "30"
+    restart: unless-stopped
+
+  ollama:
+    # The base file keeps the model loaded. On this CPU, loading it takes longer than the
+    # detection time budget, so deploy/ec2.sh also loads it after every start.
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8.4
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS to the public host name}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates, kept across restarts so they are not requested again.
+      - caddy-data:/data
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+volumes:
+  caddy-data:

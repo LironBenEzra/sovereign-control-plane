@@ -1,42 +1,7 @@
 import { useState } from "react";
 import { ApiError, infer, type InferenceReply } from "../api";
+import { SAMPLES } from "../samples";
 import { DecisionPanel } from "./DecisionPanel";
-
-interface Sample {
-  label: string;
-  expect: string;
-  prompt: string;
-}
-
-const SAMPLES: Sample[] = [
-  {
-    label: "No private data",
-    expect: "allow",
-    prompt: "Explain what a hash chain is in two sentences.",
-  },
-  {
-    label: "Contact PII",
-    expect: "redact",
-    prompt:
-      "Write a short, friendly reply to Dana Levi at dana.levi@example.com confirming Tuesday's meeting.",
-  },
-  {
-    label: "Government ID",
-    expect: "sovereign",
-    prompt:
-      "My social security number is 536-90-4399. In one sentence, what is a W-2 form?",
-  },
-  {
-    label: "Secret",
-    expect: "block",
-    prompt: "Why does this fail? AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
-  },
-  {
-    label: "Weak signal",
-    expect: "fail closed",
-    prompt: "Call me on 212-555-0123 tomorrow.",
-  },
-];
 
 interface Props {
   onShowEvidence: (auditId: string) => void;
@@ -72,15 +37,14 @@ export function Playground({ onShowEvidence }: Props) {
 
   return (
     <div className="playground">
-      <section className="card request">
-        <h2>Request</h2>
-        <p className="hint">
-          The prompt goes to <code>POST /v1/inference</code>. The control plane inspects it,
-          applies the policy, enforces the decision and records evidence.
-        </p>
-        <label className="field-label" htmlFor="prompt">
+      <section className="sheet request">
+        <label className="sheet-title" htmlFor="prompt">
           Prompt
         </label>
+        <p className="hint">
+          Sent to <code>POST /v1/inference</code>, like any client's request. Ctrl+Enter sends
+          it.
+        </p>
         <textarea
           id="prompt"
           value={prompt}
@@ -92,7 +56,7 @@ export function Playground({ onShowEvidence }: Props) {
           }}
         />
         <div className="samples">
-          <span className="field-label">Try a sample</span>
+          <span className="field-label">Samples, with the decision each should get</span>
           <div className="sample-list">
             {SAMPLES.map((sample) => (
               <button
@@ -113,7 +77,7 @@ export function Playground({ onShowEvidence }: Props) {
           onClick={() => void send()}
           disabled={busy || !prompt.trim()}
         >
-          {busy ? "Working…" : "Send through the control plane"}
+          {busy ? "Sending…" : "Send through the control plane"}
         </button>
       </section>
 
@@ -124,7 +88,7 @@ export function Playground({ onShowEvidence }: Props) {
           </div>
         )}
         {busy && (
-          <div className="card working" role="status">
+          <div className="sheet working" role="status">
             <span className="spinner" aria-hidden="true" />
             Inspecting, deciding and enforcing. The sovereign model runs on CPU, so an answer
             from it can take several seconds.
@@ -135,22 +99,12 @@ export function Playground({ onShowEvidence }: Props) {
         ) : (
           !error &&
           !busy && (
-            <div className="card empty">
-              <h2>What you will see</h2>
-              <ol className="steps-preview">
-                <li>
-                  <strong>Inspect</strong> which spans of the prompt are private data, and why.
-                </li>
-                <li>
-                  <strong>Decide</strong> which policy rule matched and what it requires.
-                </li>
-                <li>
-                  <strong>Enforce</strong> which model was called and exactly what it received.
-                </li>
-                <li>
-                  <strong>Audit</strong> the signed, hash-chained evidence for this request.
-                </li>
-              </ol>
+            <div className="empty">
+              <h2>Send a prompt to see what happens to it</h2>
+              <p>
+                The result shows what was found in it, which policy rule decided, what crossed the
+                trust boundary and what stayed inside, and the signed records it left.
+              </p>
             </div>
           )
         )}

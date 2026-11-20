@@ -1,55 +1,569 @@
-import { useEffect, useState } from "react";
-import { getPolicy } from "../api";
-import type { PolicyInfo } from "../types";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, checkPolicy, getPolicy, restoreDefaultPolicy, savePolicy } from "../api";
+import { forgetAdminToken, readAdminToken, storeAdminToken } from "../adminToken";
+import { formatDateTime, shortHash } from "../text";
+import type {
+  FieldError,
+  PolicyChangeResult,
+  PolicyCheck,
+  PolicyDocument,
+  PolicyHistoryEntry,
+  PolicyInfo,
+} from "../types";
+import { PolicyForm, ruleIdProblems } from "./policy/PolicyForm";
+import { PolicyPreviewPanel } from "./policy/PolicyPreviewPanel";
 
-export function PolicyView() {
-  const [policy, setPolicy] = useState<PolicyInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+interface Props {
+  onOpenAuditLog: () => void;
+}
 
-  useEffect(() => {
-    getPolicy()
-      .then(setPolicy)
-      .catch(() => setError("The policy could not be loaded."));
+type Panel = "save" | "restore" | "preview";
+
+export function PolicyView({ onOpenAuditLog }: Props) {
+  const [info, setInfo] = useState<PolicyInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Non-null while editing: the policy as it would be saved.
+  const [draft, setDraft] = useState<PolicyDocument | null>(null);
+  const [check, setCheck] = useState<PolicyCheck | null>(null);
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const [token, setToken] = useState(readAdminToken);
+  const [saved, setSaved] = useState<PolicyChangeResult | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setInfo(await getPolicy());
+      setLoadError(null);
+    } catch {
+      setLoadError("The policy could not be loaded.");
+    }
   }, []);
 
-  if (error) {
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Validate the draft and list what saving it would change, shortly after each edit.
+  useEffect(() => {
+    if (!draft) {
+      setCheck(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      checkPolicy(draft)
+        .then((result) => {
+          if (!cancelled) setCheck(result);
+        })
+        .catch(() => {
+          if (!cancelled) setCheck(null);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [draft]);
+
+  useEffect(() => {
+    if (panel) panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [panel]);
+
+  if (loadError) {
     return (
       <div className="banner banner-bad" role="alert">
-        {error}
+        {loadError}
       </div>
     );
   }
-  if (!policy) return <div className="card muted">Loading…</div>;
+  if (!info) return <div className="sheet muted">Loading…</div>;
+
+  function startEditing() {
+    if (!info?.document) return;
+    setSaved(null);
+    setDraft(structuredClone(info.document));
+  }
+
+  function stopEditing() {
+    setDraft(null);
+    setPanel(null);
+  }
+
+  async function afterChange(result: PolicyChangeResult) {
+    storeAdminToken(token);
+    stopEditing();
+    setSaved(result);
+    await load();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function tokenRejected() {
+    forgetAdminToken();
+    setToken("");
+  }
+
+  const tokenField = <AdminTokenField token={token} onChange={setToken} />;
+  const idProblems = draft ? ruleIdProblems(draft.rules) : new Map<number, string>();
+  const errors = check?.errors ?? [];
+  const draftValid = draft !== null && idProblems.size === 0 && check?.valid === true;
+  const changes = check?.changes ?? [];
 
   return (
-    <section className="card">
-      <h2>Active policy</h2>
-      <p className="hint">
-        Rules live in one file, <code>policy/policy.yaml</code>. It is re-read on every request,
-        so an edit takes effect on the next one. Every audit record names the SHA-256 of the
-        policy text it was decided under.
-      </p>
+    <div className="policy-page">
+      <section className="sheet">
+        <div className="toolbar">
+          <div>
+            <h2>Policy</h2>
+            <p className="hint">
+              Every prompt is checked against this policy. A change takes effect on the next
+              request, and each change is signed into the audit log with who made it and why.
+            </p>
+          </div>
+          {info.editable && !draft && (
+            <div className="toolbar-actions">
+              {(!info.is_default || !info.valid) && (
+                <button type="button" className="secondary" onClick={() => setPanel("restore")}>
+                  Restore default
+                </button>
+              )}
+              <button
+                type="button"
+                className="primary"
+                onClick={startEditing}
+                disabled={!info.document}
+              >
+                Edit policy
+              </button>
+            </div>
+          )}
+        </div>
 
-      {policy.valid ? (
-        <dl className="facts">
-          <dt>Policy</dt>
-          <dd>
-            {policy.id} <span className="muted">v{policy.version}</span>
-          </dd>
-          <dt>SHA-256</dt>
-          <dd className="mono">{policy.sha256}</dd>
-        </dl>
+        {info.valid ? (
+          <dl className="facts">
+            <dt>Policy</dt>
+            <dd>
+              {info.id} <span className="muted">v{info.version}</span>
+            </dd>
+            <dt>SHA-256</dt>
+            <dd className="mono">{info.sha256}</dd>
+            <dt>Source</dt>
+            <dd>
+              {info.is_default
+                ? "The default policy, as shipped in policy/policy.yaml"
+                : "Changed from the default"}
+            </dd>
+          </dl>
+        ) : (
+          <div className="banner banner-bad" role="alert">
+            <strong>There is no valid policy, so every request is being blocked.</strong>
+            <div className="mono">{info.error}</div>
+            {info.editable && (
+              <button type="button" className="link" onClick={() => setPanel("restore")}>
+                Restore the default policy
+              </button>
+            )}
+          </div>
+        )}
+
+        {!info.editable && (
+          <div className="banner banner-info" role="status">
+            The policy is read-only on this server because it has no admin token. Set{" "}
+            <code>SCP_ADMIN_TOKEN</code> to turn editing on.
+          </div>
+        )}
+        {saved && (
+          <div className="banner banner-good" role="status">
+            <strong>
+              Version {saved.policy.version} is in force from the next request.
+            </strong>{" "}
+            The change is record #{saved.receipt.seq} in the audit log.
+            <button type="button" className="link" onClick={onOpenAuditLog}>
+              Open the audit log
+            </button>
+          </div>
+        )}
+      </section>
+
+      {draft && info.document ? (
+        <PolicyForm document={draft} catalog={info.catalog} onChange={setDraft} />
       ) : (
+        info.document && <PolicyForm document={info.document} catalog={info.catalog} onChange={null} />
+      )}
+
+      {draft && errors.length > 0 && (
         <div className="banner banner-bad" role="alert">
-          <strong>The policy is invalid, so every request is being blocked.</strong>
-          <div className="mono">{policy.error}</div>
+          <strong>Fix these before saving:</strong>
+          <ul>
+            {errors.map((error, index) => (
+              <li key={index}>
+                {fieldName(error, draft)}: {error.message}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      {policy.text !== null ? (
-        <pre className="block yaml">{policy.text}</pre>
+      <div ref={panelRef} className="panel-anchor">
+        {panel === "preview" && draft && (
+          <PolicyPreviewPanel
+            draft={draft}
+            token={token}
+            tokenField={tokenField}
+            onTokenRejected={tokenRejected}
+            onTokenAccepted={() => storeAdminToken(token)}
+          />
+        )}
+        {panel === "save" && draft && (
+          <SavePanel
+            draft={draft}
+            info={info}
+            changes={changes}
+            token={token}
+            tokenField={tokenField}
+            onTokenRejected={tokenRejected}
+            onUseVersion={(version) => setDraft({ ...draft, version })}
+            onReload={() => {
+              stopEditing();
+              void load();
+            }}
+            onSaved={(result) => void afterChange(result)}
+            onCancel={() => setPanel(null)}
+          />
+        )}
+        {panel === "restore" && (
+          <RestorePanel
+            info={info}
+            token={token}
+            tokenField={tokenField}
+            onTokenRejected={tokenRejected}
+            onRestored={(result) => void afterChange(result)}
+            onCancel={() => setPanel(null)}
+          />
+        )}
+      </div>
+
+      {draft && (
+        <div className="edit-bar" role="region" aria-label="Your draft">
+          <p className="edit-status" role="status">
+            {errors.length + idProblems.size > 0 ? (
+              <span className="hint-bad">The draft has problems to fix.</span>
+            ) : changes.length === 0 ? (
+              "No changes yet."
+            ) : (
+              `${changes.length} change${changes.length === 1 ? "" : "s"} not saved.`
+            )}
+          </p>
+          <div className="toolbar-actions">
+            <button type="button" className="secondary" onClick={stopEditing}>
+              Discard
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!draftValid}
+              onClick={() => setPanel("preview")}
+            >
+              Try the draft
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={!draftValid || changes.length === 0}
+              onClick={() => setPanel("save")}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
+      <History entries={info.history} />
+
+      {info.text && (
+        <details className="sheet yaml-details">
+          <summary>The policy as stored (YAML)</summary>
+          <pre className="block yaml">{info.text}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** "rules.2.action" as a person would say it: "Rule 3 (redact-pii), action". */
+function fieldName(error: FieldError, draft: PolicyDocument): string {
+  if (!error.path) return "Policy";
+  const [head, index, ...rest] = error.path.split(".");
+  if (head === "rules" && index !== undefined) {
+    const id = draft.rules[Number(index)]?.id;
+    const rule = `Rule ${Number(index) + 1}${id ? ` (${id})` : ""}`;
+    return [rule, ...rest].join(", ").replaceAll("_", " ");
+  }
+  return error.path.split(".").join(", ").replaceAll("_", " ");
+}
+
+function nextPatchVersion(version: string): string | null {
+  const match = /^(.*?)(\d+)$/.exec(version);
+  return match ? `${match[1]}${Number(match[2]) + 1}` : null;
+}
+
+function AdminTokenField({ token, onChange }: { token: string; onChange: (token: string) => void }) {
+  return (
+    <label className="field">
+      <span className="field-label">Admin token</span>
+      <input
+        type="password"
+        className="mono"
+        value={token}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value.trim())}
+      />
+      <span className="hint">
+        Needed to change the policy. Ask whoever runs this server; the hosted demo keeps it in
+        AWS Secrets Manager. This browser tab keeps it until the tab is closed.
+      </span>
+    </label>
+  );
+}
+
+interface ChangeErrorState {
+  message: string;
+  errors: FieldError[];
+  conflict: boolean;
+}
+
+function describeFailure(caught: unknown, onTokenRejected: () => void): ChangeErrorState {
+  if (caught instanceof ApiError) {
+    if (caught.status === 401) {
+      onTokenRejected();
+      return { message: "The admin token was not accepted.", errors: [], conflict: false };
+    }
+    return { message: caught.message, errors: caught.errors, conflict: caught.status === 409 };
+  }
+  return { message: "The control plane could not be reached.", errors: [], conflict: false };
+}
+
+function SavePanel({
+  draft,
+  info,
+  changes,
+  token,
+  tokenField,
+  onTokenRejected,
+  onUseVersion,
+  onReload,
+  onSaved,
+  onCancel,
+}: {
+  draft: PolicyDocument;
+  info: PolicyInfo;
+  changes: string[];
+  token: string;
+  tokenField: ReactNode;
+  onTokenRejected: () => void;
+  onUseVersion: (version: string) => void;
+  onReload: () => void;
+  onSaved: (result: PolicyChangeResult) => void;
+  onCancel: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<ChangeErrorState | null>(null);
+  const sameVersion = info.valid && draft.version === info.version;
+  const suggested = sameVersion ? nextPatchVersion(draft.version) : null;
+
+  async function submit() {
+    setBusy(true);
+    setFailure(null);
+    try {
+      onSaved(await savePolicy(draft, info.base_sha256, note.trim(), token));
+    } catch (caught) {
+      setFailure(describeFailure(caught, onTokenRejected));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="sheet policy-panel" aria-labelledby="save-title">
+      <h2 id="save-title">
+        Save version {draft.version}
+      </h2>
+      <span className="field-label">What changes</span>
+      <ul className="change-list">
+        {changes.map((change, index) => (
+          <li key={index}>{change}</li>
+        ))}
+      </ul>
+      {sameVersion && (
+        <p className="hint-bad">
+          The version is still {draft.version}, the same as the policy in force, so the audit log
+          will show two different policies with one version.{" "}
+          {suggested && (
+            <button type="button" className="link" onClick={() => onUseVersion(suggested)}>
+              Use {suggested}
+            </button>
+          )}
+        </p>
+      )}
+      <label className="field">
+        <span className="field-label">Why are you changing it? This goes into the audit log.</span>
+        <textarea
+          rows={2}
+          value={note}
+          maxLength={500}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </label>
+      {tokenField}
+      {failure && <FailureBanner failure={failure} draft={draft} onReload={onReload} />}
+      <div className="panel-actions">
+        <button type="button" className="secondary" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || note.trim() === "" || token === ""}
+          onClick={() => void submit()}
+        >
+          {busy ? "Saving…" : "Save and apply"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function RestorePanel({
+  info,
+  token,
+  tokenField,
+  onTokenRejected,
+  onRestored,
+  onCancel,
+}: {
+  info: PolicyInfo;
+  token: string;
+  tokenField: ReactNode;
+  onTokenRejected: () => void;
+  onRestored: (result: PolicyChangeResult) => void;
+  onCancel: () => void;
+}) {
+  const [note, setNote] = useState("Restored the default policy.");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<ChangeErrorState | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setFailure(null);
+    try {
+      onRestored(await restoreDefaultPolicy(info.base_sha256, note.trim(), token));
+    } catch (caught) {
+      setFailure(describeFailure(caught, onTokenRejected));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="sheet policy-panel" aria-labelledby="restore-title">
+      <h2 id="restore-title">Restore the default policy</h2>
+      <p className="hint">
+        Puts the policy shipped in <code>policy/policy.yaml</code> back in force. Like any change,
+        it is recorded in the audit log, and the versions before it stay in the history.
+      </p>
+      <label className="field">
+        <span className="field-label">Note for the audit log</span>
+        <textarea
+          rows={2}
+          value={note}
+          maxLength={500}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </label>
+      {tokenField}
+      {failure && <FailureBanner failure={failure} onReload={onCancel} />}
+      <div className="panel-actions">
+        <button type="button" className="secondary" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || note.trim() === "" || token === ""}
+          onClick={() => void submit()}
+        >
+          {busy ? "Restoring…" : "Restore default"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function FailureBanner({
+  failure,
+  draft,
+  onReload,
+}: {
+  failure: ChangeErrorState;
+  draft?: PolicyDocument;
+  onReload: () => void;
+}) {
+  return (
+    <div className="banner banner-bad" role="alert">
+      <strong>{failure.message}</strong>
+      {failure.errors.length > 0 && draft && (
+        <ul>
+          {failure.errors.map((error, index) => (
+            <li key={index}>
+              {fieldName(error, draft)}: {error.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      {failure.conflict && (
+        <button type="button" className="link" onClick={onReload}>
+          Reload the policy
+        </button>
+      )}
+    </div>
+  );
+}
+
+function History({ entries }: { entries: PolicyHistoryEntry[] }) {
+  return (
+    <section className="sheet" aria-labelledby="history-title">
+      <h2 id="history-title">Change history</h2>
+      <p className="hint">
+        Read from the signed audit log, newest first. Each change was recorded before it took
+        effect.
+      </p>
+      {entries.length === 0 ? (
+        <p className="empty-history">No change yet: this server is running the policy it started with.</p>
       ) : (
-        <p className="hint">The policy file could not be read.</p>
+        <ol className="history">
+          {entries.map((entry) => (
+            <li key={entry.seq}>
+              <header>
+                <strong>
+                  {entry.restored_default ? "Restored the default, " : ""}v{entry.policy.version}
+                </strong>
+                <span className="hint nowrap">{formatDateTime(entry.ts)}</span>
+                <span className="hint mono">{entry.changed_by}</span>
+                <span className="hint">record #{entry.seq}</span>
+                <span className="hint mono">{shortHash(entry.policy.sha256, 8)}</span>
+              </header>
+              <p>{entry.note}</p>
+              {entry.changes.length > 0 && (
+                <ul className="change-list">
+                  {entry.changes.map((change, index) => (
+                    <li key={index}>{change}</li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ol>
       )}
     </section>
   );

@@ -9,9 +9,19 @@ from typing import Any, TypedDict
 
 GENESIS_HASH = "0" * 64
 
+# A request's records, in the order they are written. Every request starts with
+# `received` and ends with exactly one `outcome` or `error`.
+EVENT_RECEIVED = "received"
+EVENT_DETECTION = "detection"
 EVENT_DECISION = "decision"
+# Written just before a model is called, so a crash during the call still shows it.
+EVENT_MODEL_CALL = "model_call"
 EVENT_OUTCOME = "outcome"
+# The request failed on an unexpected exception. Takes the place of the outcome.
+EVENT_ERROR = "error"
 EVENT_POLICY_LOADED = "policy_loaded"
+# An administrator changed the policy. Written before the new version takes effect.
+EVENT_POLICY_CHANGED = "policy_changed"
 
 # Decisions taken before classification exists (bad request, no usable policy).
 # There is nothing to replay for them, but they must always be a block.

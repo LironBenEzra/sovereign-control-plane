@@ -1,0 +1,6 @@
+# HTTPS for the public host name. Caddy gets the certificate from Let's Encrypt (or
+# ZeroSSL) on first start and renews it. Plain HTTP on port 80 redirects to HTTPS.
+{$SITE_ADDRESS} {
+	encode gzip
+	reverse_proxy control-plane:8000
+}

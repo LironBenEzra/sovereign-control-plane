@@ -8,7 +8,9 @@ It needs only the log, the public key and the policy snapshots. It checks that
 
 1. every record's hash matches its content, and links to the record before it;
 2. every record is signed by the audit key;
-3. every decision has exactly one outcome (a missing outcome is an interrupted request);
+3. each request's records come in order: it starts with `received`, has at most one
+   decision, and ends with exactly one `outcome` or `error`. A request with no end is an
+   interrupted request. Logs written before `received` existed start with the decision;
 4. re-running classification and policy on the recorded signals gives the recorded
    decision. This is what "reconstruct the decision from the evidence alone" means here.
 """
@@ -29,7 +31,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from control_plane.audit.chain import (
     BUILTIN_RULE_PREFIX,
     EVENT_DECISION,
+    EVENT_DETECTION,
+    EVENT_ERROR,
+    EVENT_MODEL_CALL,
     EVENT_OUTCOME,
+    EVENT_RECEIVED,
     GENESIS_HASH,
     HASHED_FIELDS,
     record_digest,
@@ -90,15 +96,50 @@ def parse_lines(lines: Iterable[str]) -> tuple[list[dict[str, Any]], list[Proble
     return records, []
 
 
+@dataclass
+class _OpenRequest:
+    first_seq: int
+    decided: bool = False
+
+
+def _request_problem(
+    event: str, audit_id: str, seq: int, open_requests: dict[str, _OpenRequest]
+) -> str | None:
+    """Track one request record. Returns what is wrong with its order, if anything."""
+    request = open_requests.get(audit_id)
+    if event == EVENT_RECEIVED:
+        if request is not None:
+            return "second received for one audit_id"
+        open_requests[audit_id] = _OpenRequest(seq)
+    elif event == EVENT_DECISION:
+        if request is None:
+            # Written before `received` existed: the decision opened the request.
+            open_requests[audit_id] = _OpenRequest(seq, decided=True)
+        elif request.decided:
+            return "second decision for one audit_id"
+        else:
+            request.decided = True
+    elif event in (EVENT_DETECTION, EVENT_MODEL_CALL, EVENT_ERROR):
+        if request is None:
+            return f"{event} without a received record"
+        if event == EVENT_ERROR:
+            del open_requests[audit_id]
+    elif event == EVENT_OUTCOME:
+        if request is None or not request.decided:
+            return "outcome without a decision"
+        del open_requests[audit_id]
+    return None
+
+
 def verify_chain(records: Sequence[dict[str, Any]], public_key: Ed25519PublicKey) -> Report:
-    """Check hashes, links, signatures and decision/outcome pairing.
+    """Check hashes, links, signatures and the order of each request's records.
 
     Stops at the first broken record: once the chain is broken, nothing after it
     can be trusted.
     """
     report = Report()
     prev_hash = GENESIS_HASH
-    open_decisions: dict[str, int] = {}
+    open_requests: dict[str, _OpenRequest] = {}
 
     for expected_seq, record in enumerate(records):
         seq = record["seq"]
@@ -117,24 +158,16 @@ def verify_chain(records: Sequence[dict[str, Any]], public_key: Ed25519PublicKey
             report.chain_problems.append(Problem(seq, "signature is not valid"))
             break
 
-        audit_id = record["audit_id"]
-        if record["event"] == EVENT_DECISION:
-            if audit_id in open_decisions:
-                report.chain_problems.append(Problem(seq, "second decision for one audit_id"))
-                break
-            open_decisions[audit_id] = seq
-        elif record["event"] == EVENT_OUTCOME:
-            if audit_id not in open_decisions:
-                report.chain_problems.append(Problem(seq, "outcome without a decision"))
-                break
-            del open_decisions[audit_id]
+        if problem := _request_problem(record["event"], record["audit_id"], seq, open_requests):
+            report.chain_problems.append(Problem(seq, problem))
+            break
 
         prev_hash = record["hash"]
         report.records += 1
         report.head_seq = seq
         report.head_hash = record["hash"]
 
-    report.incomplete = sorted(open_decisions, key=open_decisions.__getitem__)
+    report.incomplete = sorted(open_requests, key=lambda a: open_requests[a].first_seq)
     return report
 
 
@@ -223,7 +256,7 @@ def _print_report(report: Report) -> None:
     for problem in report.replay_problems:
         print(f"REPLAY MISMATCH at record {problem.seq}: {problem.reason}")
     for audit_id in report.incomplete:
-        print(f"interrupted request (decision without outcome): {audit_id}")
+        print(f"interrupted request (no outcome or error recorded): {audit_id}")
     print("RESULT: " + ("OK - the log is intact" if report.ok else "FAILED"))
 
 

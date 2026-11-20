@@ -27,7 +27,7 @@ from control_plane.detection.base import Detector, DetectorRunner
 from control_plane.detection.rules import RuleDetector
 from control_plane.egress import EgressGateway
 from control_plane.models import Finding
-from control_plane.pipeline import ControlPlane
+from control_plane.pipeline import ControlPlane, PolicyChange
 from control_plane.policy import Policy, PolicyStore, parse_policy
 from control_plane.providers.base import ModelReply, ProviderError, ProviderStatus
 
@@ -63,6 +63,7 @@ class KeywordDetector:
     ) -> None:
         self.name = name
         self._known = known
+        self.entity_types = frozenset(entity_type for entity_type, _ in known.values())
         self.error = error
         self._fail_when = fail_when
         self._delay_s = delay_s
@@ -138,6 +139,7 @@ class Harness:
     sovereign: FakeProvider
     external: FakeProvider
     detectors: Sequence[Detector]
+    runner: DetectorRunner
     data_dir: Path
     policy_path: Path
 
@@ -150,6 +152,21 @@ class Harness:
 
     def log_text(self) -> str:
         return self.audit.path.read_text(encoding="utf-8")
+
+    def change_policy(self, text: str, note: str = "test change") -> PolicyChange:
+        """Put a policy in force the way an administrator does: through the control plane."""
+        return self.plane.change_policy(
+            parse_policy(text.encode()),
+            base_sha256=self.policies.active_sha256(),
+            note=note,
+            changed_by="admin-token:test",
+        )
+
+    def corrupt_policy(self) -> None:
+        """Damage the stored version in force, as a disk fault or someone with disk access would."""
+        sha256 = self.policies.current().sha256
+        snapshot = self.data_dir / "policies" / f"{sha256}.yaml"
+        snapshot.write_text("rules: this is not a valid policy")
 
 
 HarnessFactory = Callable[..., Harness]
@@ -184,8 +201,9 @@ def make_harness(tmp_path: Path) -> HarnessFactory:
         detectors = detectors if detectors is not None else [RuleDetector(), KeywordDetector()]
         policies = PolicyStore(policy_path, data_dir / "policies")
         egress = EgressGateway(external)
+        runner = DetectorRunner(detectors, detection_timeout_s)
         plane = ControlPlane(
-            detectors=DetectorRunner(detectors, detection_timeout_s),
+            detectors=runner,
             policies=policies,
             audit=audit,
             sovereign=sovereign,
@@ -193,7 +211,16 @@ def make_harness(tmp_path: Path) -> HarnessFactory:
             hmac_key=load_or_create_hmac_key(key_dir),
         )
         return Harness(
-            plane, audit, policies, egress, sovereign, external, detectors, data_dir, policy_path
+            plane,
+            audit,
+            policies,
+            egress,
+            sovereign,
+            external,
+            detectors,
+            runner,
+            data_dir,
+            policy_path,
         )
 
     return build

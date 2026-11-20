@@ -1,25 +1,30 @@
 import { useEffect, useState } from "react";
-import { getHealth } from "./api";
+import { getAlerts, getHealth } from "./api";
+import { Alerts } from "./components/Alerts";
 import { AuditLog } from "./components/AuditLog";
 import { Playground } from "./components/Playground";
 import { PolicyView } from "./components/PolicyView";
-import type { Health, ModelStatus } from "./types";
+import type { AlertsReport, Health, ModelStatus } from "./types";
 
-type Tab = "playground" | "audit" | "policy";
+type Tab = "playground" | "alerts" | "audit" | "policy";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "playground", label: "Playground" },
+  { id: "alerts", label: "Alerts" },
   { id: "audit", label: "Audit log" },
   { id: "policy", label: "Policy" },
 ];
 
 const HEALTH_POLL_MS = 15_000;
+// For the badge on the Alerts tab: what needs attention in the last 24 hours.
+const ALERTS_POLL_MS = 30_000;
 
 export function App() {
   const [tab, setTab] = useState<Tab>("playground");
-  const [focusAuditId, setFocusAuditId] = useState<string | null>(null);
+  const [auditQuery, setAuditQuery] = useState<string | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [reachable, setReachable] = useState(true);
+  const [alerts, setAlerts] = useState<AlertsReport | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,9 +46,35 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () =>
+      getAlerts(24)
+        .then((next) => {
+          if (!cancelled) setAlerts(next);
+        })
+        .catch(() => {
+          // The header already says when the control plane is unreachable.
+        });
+    void poll();
+    const timer = window.setInterval(poll, ALERTS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const needAttention = alerts?.alerts.filter((a) => a.severity !== "info").length ?? 0;
+
+  // The window scroll is shared by every tab, so a new tab would otherwise open part way down.
+  function openTab(next: Tab) {
+    setTab(next);
+    window.scrollTo({ top: 0 });
+  }
+
   function showEvidence(auditId: string) {
-    setFocusAuditId(auditId);
-    setTab("audit");
+    setAuditQuery(auditId);
+    openTab("audit");
   }
 
   return (
@@ -56,8 +87,24 @@ export function App() {
             <p>Private-data policy enforcement in front of AI models</p>
           </div>
         </div>
-        <div className="status">
-          {!reachable && <span className="chip outcome-failed">Control plane unreachable</span>}
+        <div className="status" aria-label="System status">
+          {!reachable && <span className="status-alert">Control plane unreachable</span>}
+          {reachable && health && !health.policy.valid && (
+            <span
+              className="status-alert"
+              title={`${health.policy.error ?? "The policy file is missing or invalid"}. Every request is blocked until a valid policy is restored on the Policy tab.`}
+            >
+              Policy invalid
+            </span>
+          )}
+          {reachable && health && Object.keys(health.failing_detectors).length > 0 && (
+            <span
+              className="status-alert"
+              title={`Failing: ${Object.keys(health.failing_detectors).join(", ")}. Every prompt is treated as private and answers are withheld until it is fixed.`}
+            >
+              Detection unavailable
+            </span>
+          )}
           {health && (
             <>
               <ModelChip label="Sovereign model" model={health.sovereign_model} />
@@ -74,9 +121,17 @@ export function App() {
             type="button"
             className={tab === item.id ? "tab active" : "tab"}
             aria-current={tab === item.id ? "page" : undefined}
-            onClick={() => setTab(item.id)}
+            onClick={() => openTab(item.id)}
           >
             {item.label}
+            {item.id === "alerts" && needAttention > 0 && alerts && (
+              <span
+                className={`tab-badge sev-${alerts.status}`}
+                aria-label={`${needAttention} need attention`}
+              >
+                {needAttention}
+              </span>
+            )}
           </button>
         ))}
       </nav>
@@ -86,14 +141,16 @@ export function App() {
         <div hidden={tab !== "playground"}>
           <Playground onShowEvidence={showEvidence} />
         </div>
-        {tab === "audit" && (
-          <AuditLog
-            key={focusAuditId ?? "all"}
-            focusAuditId={focusAuditId}
-            onClearFocus={() => setFocusAuditId(null)}
+        {tab === "alerts" && <Alerts onShowEvidence={showEvidence} />}
+        {tab === "audit" && <AuditLog query={auditQuery} onQueryChange={setAuditQuery} />}
+        {tab === "policy" && (
+          <PolicyView
+            onOpenAuditLog={() => {
+              setAuditQuery(null);
+              openTab("audit");
+            }}
           />
         )}
-        {tab === "policy" && <PolicyView />}
       </main>
     </div>
   );
@@ -102,12 +159,11 @@ export function App() {
 function ModelChip({ label, model }: { label: string; model: ModelStatus }) {
   const state = model.stub ? "stub" : model.ready ? "ready" : "down";
   return (
-    <span className={`status-chip status-${state}`} title={model.detail}>
+    <span className={`status-item status-${state}`} title={model.detail}>
       <span className="dot" aria-hidden="true" />
       <span className="status-label">{label}</span>
       <span className="status-value">
-        {model.provider}
-        {model.stub ? " (stub)" : model.ready ? "" : " (not ready)"}
+        {model.stub ? "stub" : model.ready ? model.model : "not ready"}
       </span>
     </span>
   );

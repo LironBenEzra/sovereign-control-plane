@@ -9,7 +9,7 @@ import {
   segmentText,
   shortHash,
 } from "../text";
-import type { Finding } from "../types";
+import type { Finding, InferenceResult } from "../types";
 
 interface Props {
   reply: InferenceReply;
@@ -19,22 +19,21 @@ interface Props {
 
 export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
   const { result, httpStatus } = reply;
-  const { decision, classification, policy, model, receipts } = result;
+  const { decision, classification, policy, receipts } = result;
   const inspected = normalizePrompt(prompt);
   const counted = classification.findings.filter((finding) => finding.counted);
   const ignored = classification.findings.length - counted.length;
 
   return (
-    <div className="decision">
-      <header className={`card verdict action-${decision.action}`}>
+    <article className={`result-sheet action-${decision.action}`}>
+      <header className="verdict">
         <div className="verdict-main">
-          <span className="verdict-label">Decision</span>
-          <span className="verdict-action">{ACTION_LABELS[decision.action]}</span>
-          <span className="verdict-summary">{ACTION_SUMMARIES[decision.action]}</span>
+          <h2 className="verdict-action">{ACTION_LABELS[decision.action]}</h2>
+          <p className="verdict-summary">{ACTION_SUMMARIES[decision.action]}</p>
         </div>
         <div className="chips">
           <span className={`chip outcome-${result.outcome}`}>{OUTCOME_TEXT[result.outcome]}</span>
-          {decision.fail_closed && <span className="chip chip-warn">Fail closed</span>}
+          {decision.fail_closed && <span className="chip chip-warn">Failed closed</span>}
           {httpStatus !== 200 && <span className="chip">HTTP {httpStatus}</span>}
         </div>
       </header>
@@ -43,7 +42,7 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
         <p>{classification.rationale}</p>
         {classification.label !== "invalid_input" && (
           <>
-            <div className="field-label">Prompt as inspected</div>
+            <div className="field-label">The prompt as inspected</div>
             <HighlightedText text={inspected} findings={classification.findings} />
           </>
         )}
@@ -56,7 +55,7 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
         )}
       </Step>
 
-      <Step number={2} title="Decide" subtitle={`Rule: ${decision.rule_id}`}>
+      <Step number={2} title="Decide" subtitle={`Rule ${decision.rule_id}`}>
         <p>{decision.rationale}</p>
         {policy ? (
           <dl className="facts">
@@ -80,55 +79,26 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
             Reason: <code>{result.outcome_reason}</code>
           </p>
         )}
-        {model ? (
-          <dl className="facts">
-            <dt>Model</dt>
-            <dd>
-              {model.provider} <span className="muted">{model.model}</span>
-            </dd>
-            <dt>Location</dt>
-            <dd>
-              <span className={`chip ${model.in_boundary ? "chip-inside" : "chip-outside"}`}>
-                {model.in_boundary ? "Inside the trust boundary" : "External"}
-              </span>
-              {model.stub && (
-                <span className="chip chip-warn" title="No real model was called">
-                  Stub
-                </span>
-              )}
-            </dd>
-          </dl>
-        ) : (
-          <p className="hint">No model was called.</p>
-        )}
-        {result.forwarded_prompt !== null && (
-          <>
-            <div className="field-label">
-              Exactly what the model received
-              {model && !model.in_boundary && " (this is what left the boundary)"}
-            </div>
-            <pre className="block">{result.forwarded_prompt}</pre>
-          </>
-        )}
-        {result.response !== null && (
-          <>
-            <div className="field-label">Response returned to the caller</div>
-            <pre className="block block-response">{result.response}</pre>
-          </>
-        )}
+        <Boundary result={result} />
       </Step>
 
-      <Step number={4} title="Audit" subtitle="Two signed records">
+      <Step number={4} title="Audit" subtitle="Signed receipts">
         <dl className="facts">
           <dt>Audit ID</dt>
           <dd className="mono">{result.audit_id}</dd>
           <dt>Decision record</dt>
-          <dd className="mono" title={receipts.decision.hash}>
-            #{receipts.decision.seq} · {shortHash(receipts.decision.hash, 16)}
+          <dd>
+            <span className="mono">#{receipts.decision.seq}</span>{" "}
+            <span className="mono muted" title={receipts.decision.hash}>
+              {shortHash(receipts.decision.hash, 16)}
+            </span>
           </dd>
           <dt>Outcome record</dt>
-          <dd className="mono" title={receipts.outcome.hash}>
-            #{receipts.outcome.seq} · {shortHash(receipts.outcome.hash, 16)}
+          <dd>
+            <span className="mono">#{receipts.outcome.seq}</span>{" "}
+            <span className="mono muted" title={receipts.outcome.hash}>
+              {shortHash(receipts.outcome.hash, 16)}
+            </span>
           </dd>
           <dt>Signing key</dt>
           <dd className="mono">{receipts.outcome.key_id}</dd>
@@ -138,9 +108,67 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
           receipt: if a record is later changed or removed, it will no longer match.
         </p>
         <button type="button" className="link" onClick={() => onShowEvidence(result.audit_id)}>
-          Open the evidence for this request →
+          Open the evidence for this request
         </button>
       </Step>
+    </article>
+  );
+}
+
+/**
+ * Where the prompt went, drawn on either side of the trust boundary. The left side never
+ * leaves the boundary; the right side is exactly what crossed it, if anything did.
+ */
+function Boundary({ result }: { result: InferenceResult }) {
+  const { model } = result;
+  const external = model !== null && !model.in_boundary;
+  const restored = result.model_reply !== null && result.model_reply !== result.response;
+  const sentOutside = external && result.forwarded_prompt !== null;
+  return (
+    <div className="boundary">
+      <section className="boundary-side boundary-inside" aria-label="Inside your boundary">
+        <h4>Inside your boundary</h4>
+        {model === null && <p className="hint">No model was called.</p>}
+        {model?.in_boundary && result.forwarded_prompt !== null && (
+          <Passage label={`Sent to ${model.provider}, ${model.model}`}>
+            {result.forwarded_prompt}
+          </Passage>
+        )}
+        {result.response !== null && (
+          <Passage
+            label={restored ? "Returned to you, with the original values put back" : "Returned to you"}
+            prose
+          >
+            {result.response}
+          </Passage>
+        )}
+      </section>
+      <section className="boundary-side boundary-outside" aria-label="Outside">
+        <h4>Outside</h4>
+        {sentOutside && model ? (
+          <>
+            <Passage label={`Sent to ${model.provider}${model.stub ? ", a stub" : ""}`}>
+              {result.forwarded_prompt}
+            </Passage>
+            {result.model_reply !== null ? (
+              <Passage label="The reply that came back">{result.model_reply}</Passage>
+            ) : (
+              <p className="hint">No answer came back.</p>
+            )}
+          </>
+        ) : (
+          <p className="nothing-crossed">Nothing crossed the boundary.</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function Passage(props: { label: string; prose?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="passage">
+      <div className="field-label">{props.label}</div>
+      <pre className={props.prose ? "block block-response" : "block"}>{props.children}</pre>
     </div>
   );
 }
@@ -152,7 +180,7 @@ function Step(props: {
   children: React.ReactNode;
 }) {
   return (
-    <section className="card step">
+    <section className="step">
       <header className="step-head">
         <span className="step-number">{props.number}</span>
         <h3>{props.title}</h3>
@@ -165,7 +193,7 @@ function Step(props: {
 
 function describe(findings: Finding[]): string {
   return findings
-    .map((f) => `${f.entity_type} · score ${f.score} · ${f.recognizer} (${f.detector})`)
+    .map((f) => `${f.entity_type}, score ${f.score}, ${f.recognizer} (${f.detector})`)
     .join("\n");
 }
 
@@ -193,11 +221,25 @@ function HighlightedText({ text, findings }: { text: string; findings: Finding[]
   );
 }
 
+// A semantic finding covers a whole passage; the table shows its start, the highlight above
+// shows all of it.
+const FOUND_CHARS = 48;
+
+function FoundCell({ value }: { value: string }) {
+  const chars = Array.from(value);
+  const shown = chars.length > FOUND_CHARS ? `${chars.slice(0, FOUND_CHARS).join("")}…` : value;
+  return (
+    <td className="mono found" title={value}>
+      {shown}
+    </td>
+  );
+}
+
 function FindingsTable({ text, findings }: { text: string; findings: Finding[] }) {
   const chars = Array.from(text);
   return (
     <div className="table-wrap">
-      <table>
+      <table className="findings">
         <thead>
           <tr>
             <th>Found</th>
@@ -210,7 +252,7 @@ function FindingsTable({ text, findings }: { text: string; findings: Finding[] }
         <tbody>
           {findings.map((finding, index) => (
             <tr key={index}>
-              <td className="mono found">{chars.slice(finding.start, finding.end).join("")}</td>
+              <FoundCell value={chars.slice(finding.start, finding.end).join("")} />
               <td>{finding.entity_type}</td>
               <td>
                 <span className={`chip tone-${categoryTone(finding.category)}`}>

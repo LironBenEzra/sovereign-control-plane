@@ -116,6 +116,7 @@ RULES: tuple[PatternRule, ...] = (
 class RuleDetector:
     name = DETECTOR_NAME
     version = DETECTOR_VERSION
+    entity_types = frozenset({rule.entity_type for rule in RULES} | {HIGH_ENTROPY_STRING})
 
     def detect(self, text: str, entity_types: Collection[str]) -> list[Finding]:
         wanted = set(entity_types)

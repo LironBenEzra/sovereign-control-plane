@@ -6,6 +6,16 @@ This is captured output from the system running in Docker (`docker compose up --
 - **External model:** the labelled stub, because no Anthropic API key was set for this run. The evidence says so: look for `"stub": true` and `"destination": "stub-external"`.
 - **Detectors:** the pattern rules and Presidio with `en_core_web_md`.
 
+> **Recorded on 2026-11-19.** These changes came after it:
+>
+> - API responses now also include `model_reply`: the model's answer before placeholders are restored.
+> - Audit records no longer include `value_hmac` for each finding or `hmac` in the outcome's `response` block. Records like the ones below still verify and replay with the current code.
+> - When there is no answer because a component is down, the API now returns HTTP 503 with `Retry-After` and a message. Case A in section 4 (the sovereign model is down) now returns 503. `/healthz` reports `degraded` while a detector is failing.
+> - Case B in section 4 (the policy file is invalid) now returns HTTP 503 with `Retry-After`, and the message says the policy file must be fixed. `/healthz` reports `degraded` while the policy is invalid.
+> - A third detector, the semantic detector, now judges every prompt for confidential business content and prompt injection, so each decision record lists three detectors. The policy is version 1.2.0: confidential business content is kept inside the boundary, and prompt injection is blocked. `scripts/demo.py` now sends eight requests: the new fourth one is confidential business content, routed to the sovereign model, and the new sixth one is an injection hidden in a pasted email, blocked.
+> - The sovereign model is now `llama3.2:3b`, the same model the semantic detector uses. The run below used `llama3.2:1b`.
+> - Each request now leaves one audit record per step, not two: `received` when it arrives, `detection`, `decision`, `model_call` just before a model is called, then `outcome`, or `error` if an unexpected exception stopped it. The decision and outcome records below are unchanged, and logs with only those two still verify. The `detection` record also keeps the prompt masked, such as `Write a short, friendly reply to <PERSON_1> at <EMAIL_ADDRESS_1> confirming Tuesday's meeting.`
+
 ## 1. Six requests
 
 ```bash

@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 SPACY_MODEL := en_core_web_md
 
-.PHONY: help up down install dev lint format typecheck test check verify demo tamper-demo ui
+.PHONY: help up down install dev lint format typecheck test check verify demo tamper-demo eval-semantic ui
 
 help:
 	@echo "make up           run everything in Docker (API + UI + Ollama) on http://localhost:8000"
@@ -12,8 +12,9 @@ help:
 	@echo "make demo         send the sample requests to a running control plane"
 	@echo "make verify       verify the audit log: chain, signatures, replay"
 	@echo "make tamper-demo  edit a copy of the audit log and show the verifier catching it"
-	@echo "                  (verify and tamper-demo run inside the container; add LOCAL=1"
-	@echo "                   to run them against ./data after 'make dev')"
+	@echo "make eval-semantic measure the semantic detector on a labelled set, with the real model"
+	@echo "                  (verify, tamper-demo and eval-semantic run inside the container;"
+	@echo "                   add LOCAL=1 to run them on this machine after 'make dev')"
 
 up:
 	docker compose up --build
@@ -64,6 +65,9 @@ verify:
 
 tamper-demo:
 	$(RUN) scripts/tamper_demo.py --data-dir $(DATA)
+
+eval-semantic:
+	$(RUN) scripts/eval_semantic.py
 
 demo:
 	python3 scripts/demo.py

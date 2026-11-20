@@ -39,10 +39,18 @@ class EgressGateway:
     def destination(self) -> str:
         return self._provider.name
 
-    def send(self, payload: str, decision: Decision, policy: Policy) -> ModelReply:
-        """Send `payload` to the external model, or raise EgressDeniedError."""
+    def check(self, decision: Decision, policy: Policy) -> None:
+        """Raise EgressDeniedError unless `send` would send. Sends nothing.
+
+        Lets the caller record the call before it is made, and only if it will be made.
+        """
         if decision.action not in EXTERNAL_ACTIONS:
             raise EgressDeniedError("action_does_not_permit_egress")
         if self.destination not in policy.document.egress.allowed_destinations:
             raise EgressDeniedError("destination_not_allowlisted")
+
+    def send(self, payload: str, decision: Decision, policy: Policy) -> ModelReply:
+        """Send `payload` to the external model, or raise EgressDeniedError."""
+        # Checked again here, so no caller can send without the check.
+        self.check(decision, policy)
         return self._provider.generate(payload)
