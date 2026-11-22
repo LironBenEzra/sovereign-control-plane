@@ -4,6 +4,7 @@ A control plane that sits in front of AI models and enforces policy on private d
 
 ![System design](docs/architecture.png)
 
+- **[Reviewer guide](https://lironbenezra.github.io/sovereign-control-plane/review-guide/)** is an interactive page: send sample requests through the diagram, read the code map, the policy and the tests. Its source is [docs/review-guide/index.html](docs/review-guide/index.html).
 - **[DESIGN.md](DESIGN.md)** explains the system design, the trust boundary, the threat model and the reasoning behind each decision.
 - **[docs/sample-run.md](docs/sample-run.md)** is a captured run: eight requests, each with its enforcement outcome and audit evidence, then live faults.
 - **[docs/architecture.excalidraw](docs/architecture.excalidraw)** is the editable diagram.
@@ -146,7 +147,7 @@ The real response to that command, with hashes shortened and a few fields left o
 }
 ```
 
-`forwarded_prompt` is exactly what left the boundary. `model_reply` is what the model sent back, still in placeholders (after the output scan, which removes any secrets). `response` is what the caller gets back, with the placeholders restored inside the boundary.
+`forwarded_prompt` is exactly what left the boundary. `model_reply` is what the model sent back, still in placeholders (after the output scan, which removes any secrets and confidential business passages). `response` is what the caller gets back, with the placeholders restored inside the boundary.
 
 ### Change the policy
 
