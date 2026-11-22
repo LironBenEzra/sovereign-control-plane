@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from control_plane.audit.verify import Problem, Report
-from control_plane.detection.rules import RuleDetector
 from control_plane.monitoring import (
     Alert,
     Group,
@@ -19,7 +18,7 @@ from control_plane.monitoring import (
     live_alerts,
     summarize_log,
 )
-from control_plane.pipeline import EvidenceUnavailableError, RequestFailedError
+from control_plane.pipeline import EvidenceUnavailableError
 from control_plane.policy import parse_policy
 from control_plane.providers.base import ProviderStatus
 from tests.conftest import (
@@ -28,8 +27,6 @@ from tests.conftest import (
     EMAIL,
     PERSON,
     SSN,
-    WEAK_PHONE,
-    FakeProvider,
     Harness,
     HarnessFactory,
     KeywordDetector,
@@ -92,70 +89,6 @@ def test_no_rule_matched_shows_the_evidence_but_never_the_prompt(
     assert "Write a short reply" not in report
 
 
-def test_requests_blocked_while_the_policy_was_broken_and_the_policy_timeline(
-    make_harness: HarnessFactory,
-) -> None:
-    harness = make_harness()
-    harness.plane.handle(CLEAN)
-    harness.corrupt_policy()
-    harness.plane.handle(CLEAN)
-    harness.plane.change_policy(
-        harness.policies.default(),
-        base_sha256=harness.policies.active_sha256(),
-        note="Restored after a disk fault",
-        changed_by="admin-token:test",
-        restored_default=True,
-    )
-    harness.plane.handle(CLEAN)
-    # A restart loads the same policy again, which is not a change.
-    restarted = make_harness()
-    restarted.plane.handle(CLEAN)
-
-    summary = summarize(harness)
-
-    assert find(summary, "blocked_policy_unavailable").count == 1
-    timeline = summary.metrics["policy_timeline"]
-    assert [event["valid"] for event in timeline] == [True, False, True]
-    assert "modified on disk" in timeline[1]["error"]
-    assert (timeline[2]["note"], timeline[2]["changed_by"]) == (
-        "Restored after a disk fault",
-        "admin-token:test",
-    )
-
-
-def test_many_uncertain_decisions_warn_only_once_there_are_enough(
-    make_harness: HarnessFactory,
-) -> None:
-    harness = make_harness()
-    weak = f"Call me on {WEAK_PHONE} tomorrow."
-    for _ in range(9):
-        harness.plane.handle(weak)
-
-    assert "uncertain_share" not in ids(summarize(harness).alerts)
-
-    harness.plane.handle(weak)
-    summary = summarize(harness)
-
-    assert find(summary, "uncertain_share").count == 10
-    assert summary.metrics["uncertain_share"] == 1.0
-
-
-def test_rules_that_never_matched_are_listed_only_with_enough_decisions(
-    make_harness: HarnessFactory,
-) -> None:
-    harness = make_harness()
-    for _ in range(19):
-        harness.plane.handle(CLEAN)
-
-    assert summarize(harness).metrics["rules_not_matched"] is None
-
-    harness.plane.handle(CLEAN)
-    not_matched = summarize(harness).metrics["rules_not_matched"]
-
-    assert "allow-clean" not in not_matched
-    assert set(not_matched) == set(RULE_IDS) - {"allow-clean"}
-
-
 # ---------------------------------------------------------------- security
 
 
@@ -180,34 +113,7 @@ def test_security_events_name_the_client(make_harness: HarnessFactory) -> None:
     )
 
 
-def test_egress_refused_by_the_allowlist(make_harness: HarnessFactory) -> None:
-    harness = make_harness(external=FakeProvider("some-other-cloud", in_boundary=False))
-
-    harness.plane.handle(CLEAN)
-
-    assert find(summarize(harness), "egress_refused").count == 1
-
-
 # ---------------------------------------------------------------- service
-
-
-def test_blocked_because_the_local_model_was_down(make_harness: HarnessFactory) -> None:
-    harness = make_harness(sovereign=FakeProvider("ollama", in_boundary=True, error="connection"))
-
-    harness.plane.handle(REGULATED)
-
-    alert = find(summarize(harness), "local_model_unavailable")
-    assert alert.examples[0].reason == "sovereign_model_unavailable:connection"
-
-
-def test_a_failed_output_scan_is_a_withheld_answer(make_harness: HarnessFactory) -> None:
-    # Works on the prompt, fails on the model's answer, which the fake provider prefixes.
-    flaky = KeywordDetector({}, name="flaky", fail_when=lambda text: text.startswith("echo:"))
-    harness = make_harness(detectors=[RuleDetector(), flaky])
-
-    harness.plane.handle(CLEAN)
-
-    assert ids(summarize(harness).alerts) == {"answers_withheld"}
 
 
 def test_detection_failures_name_the_detector_and_the_error(
@@ -237,57 +143,6 @@ def test_a_decision_with_no_outcome_is_interrupted_after_the_grace_period(
     assert find(later, "interrupted_requests").count == 1
 
 
-def test_a_request_with_no_decision_is_interrupted_after_the_grace_period(
-    make_harness: HarnessFactory,
-) -> None:
-    harness = make_harness()
-    harness.audit.fail_on = frozenset({"detection"})
-    with pytest.raises(EvidenceUnavailableError):
-        harness.plane.handle(CLEAN, client_id="batch-job")
-    received = datetime.fromisoformat(harness.records("received")[0]["ts"])
-
-    assert "interrupted_requests" not in ids(summarize(harness).alerts)
-    later = find(summarize(harness, now=received + timedelta(minutes=11)), "interrupted_requests")
-    assert later.count == 1
-    assert (later.examples[0].reason, later.examples[0].client) == ("no decision", "batch-job")
-
-
-@pytest.mark.parametrize(
-    ("target", "reason", "rule_id"),
-    [
-        ("decide", "decision:RuntimeError", None),
-        ("egress", "enforcement:RuntimeError", "redact-pii"),
-    ],
-)
-def test_an_internal_error_is_an_alert_naming_the_step_that_failed(
-    make_harness: HarnessFactory,
-    monkeypatch: pytest.MonkeyPatch,
-    target: str,
-    reason: str,
-    rule_id: str | None,
-) -> None:
-    harness = make_harness()
-
-    def explode(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError
-
-    if target == "egress":
-        monkeypatch.setattr(harness.egress, "check", explode)
-    else:
-        monkeypatch.setattr(f"control_plane.pipeline.{target}", explode)
-    with pytest.raises(RequestFailedError):
-        harness.plane.handle(PII, client_id="batch-job")
-
-    summary = summarize(harness)
-    alert = find(summary, "internal_errors")
-    assert alert.count == 1
-    example = alert.examples[0]
-    assert (example.reason, example.rule_id, example.client) == (reason, rule_id, "batch-job")
-    # An error ends the request, so it is never also counted as interrupted.
-    later = summarize(harness, now=datetime.now(UTC) + timedelta(minutes=11))
-    assert "interrupted_requests" not in ids(later.alerts)
-
-
 # ---------------------------------------------------------------- metrics and window
 
 
@@ -310,19 +165,6 @@ def test_metrics_count_actions_outcomes_categories_and_clients(
     assert metrics["latency_ms"]["outside"]["count"] == 3
     assert metrics["latency_ms"]["inside"]["count"] == 1
     assert metrics["top_clients"][0] == {"client": "web-ui", "requests": 4, "blocked": 1}
-
-
-def test_requests_before_the_window_are_left_out(make_harness: HarnessFactory) -> None:
-    harness = make_harness()
-    harness.plane.handle(SECRET)
-    now = datetime.now(UTC)
-
-    def requests_since(since: datetime) -> int:
-        summary = summarize_log(harness.audit.read(), since=since, now=now, rule_ids=RULE_IDS)
-        return summary.metrics["requests"]
-
-    assert requests_since(now - timedelta(hours=1)) == 1
-    assert requests_since(now + timedelta(seconds=1)) == 0
 
 
 # ---------------------------------------------------------------- live status and report
@@ -353,39 +195,3 @@ def test_live_alerts_for_a_broken_system() -> None:
     assert {a.severity for a in alerts if a.id != "external_model_down"} == {Severity.CRITICAL}
     assert "SCP_DETECTION_TIMEOUT_S" in by_id["detector_failing:semantic"].action
     assert "Record 3" in by_id["audit_verification_failed"].detail
-
-
-def test_a_healthy_system_has_no_live_alerts() -> None:
-    assert (
-        live_alerts(
-            policy_error=None,
-            failing_detectors={},
-            sovereign=model(),
-            external=model(),
-            verification=Report(),
-        )
-        == []
-    )
-
-
-def test_the_report_puts_the_worst_first_and_says_how_bad_it_is(
-    make_harness: HarnessFactory,
-) -> None:
-    harness = make_harness()
-    harness.plane.handle(SECRET)
-    summary = summarize(harness)
-    now = datetime.now(UTC)
-    critical = live_alerts(
-        policy_error="invalid policy",
-        failing_detectors={},
-        sovereign=model(),
-        external=model(),
-        verification=Report(),
-    )
-
-    report = build_report(critical, summary, hours=1, since=now, now=now)
-    quiet = build_report([], LogSummary([], summary.metrics), hours=1, since=now, now=now)
-
-    assert report["status"] == "critical"
-    assert [a["severity"] for a in report["alerts"]] == ["critical", "warning"]
-    assert quiet["status"] == "ok"

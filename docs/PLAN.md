@@ -184,7 +184,7 @@ The total estimate was about 10.5 hours. If time had run short, the plan was to 
 
 These were run on the finished build:
 
-- `make check` passes: Ruff, Pyright, and 218 pytest tests.
+- `make check` passes: Ruff, Pyright, and 148 pytest tests.
 - After `docker compose up --build`, `make demo` sends eight requests: no private data, contact PII, a government ID, confidential business content, a secret, a prompt injection hidden in a pasted email, a weak signal and a malformed body. The actions are allow, redact, route to the sovereign model (twice), block (twice), route to the sovereign model, and block (HTTP 422).
 - The hosted demo (https://sovereign-demo.here, one EC2 instance, deployed with `deploy/ec2.sh`) gives the same actions for all eight sample requests. There, prompts of 2,400 and 3,500 characters were judged by the semantic detector, and one of 4,200 characters was treated as private, with `/healthz` reporting the timeout.
 - `make eval-semantic` on 48 prompts: 17 of 18 confidential prompts caught and 26 of 30 others let through; 9 of 9 prompt injections caught and none of 39 others flagged. The same answer for every case over three runs, one of them on the hosted server.

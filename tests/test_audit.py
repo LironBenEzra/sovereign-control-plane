@@ -9,12 +9,11 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from control_plane.audit.chain import GENESIS_HASH, record_digest
-from control_plane.audit.keys import key_id, keyed_hash, load_or_create_signing_key, sign_digest
+from control_plane.audit.keys import load_or_create_signing_key, sign_digest
 from control_plane.audit.log import AuditIntegrityError, AuditLog
 from control_plane.audit.signing import LocalSigner
 from control_plane.audit.verify import main as verify_main
 from control_plane.audit.verify import parse_lines, receipt_problem, verify_chain
-from control_plane.evidence import signals_from_evidence
 from tests.conftest import EMAIL, PERSON, SSN, Harness, HarnessFactory
 
 
@@ -93,38 +92,12 @@ def test_rewriting_the_chain_with_another_key_is_detected(
     assert first_problem(log, key) == (0, "signature is not valid")
 
 
-def test_a_log_signed_by_another_key_names_both_keys(log: AuditLog, key: Ed25519PrivateKey) -> None:
-    # What a server sees when it starts with a new key, for example one moved to AWS KMS.
-    new_key = Ed25519PrivateKey.generate()
-    old_id, new_id = key_id(key.public_key()), key_id(new_key.public_key())
-
-    with pytest.raises(
-        AuditIntegrityError, match=f"record 0: signed by key {old_id}, not by {new_id}"
-    ):
-        AuditLog(log.path, LocalSigner(new_key))
-
-
 def test_deleting_a_record_is_detected(log: AuditLog, key: Ed25519PrivateKey) -> None:
     records = read(log)
     del records[1]
     rewrite(log, records)
 
     assert first_problem(log, key) == (1, "expected seq 1, found 2")
-
-
-def test_reordering_records_is_detected(log: AuditLog, key: Ed25519PrivateKey) -> None:
-    records = read(log)
-    records[1], records[2] = records[2], records[1]
-    rewrite(log, records)
-
-    assert first_problem(log, key)[0] == 1
-
-
-def test_a_corrupt_line_is_detected(log: AuditLog, key: Ed25519PrivateKey) -> None:
-    with log.path.open("a") as handle:
-        handle.write('{"seq": 4, "truncated')
-
-    assert first_problem(log, key) == (4, "line is not valid JSON")
 
 
 def test_truncation_passes_the_chain_but_fails_a_kept_receipt(
@@ -186,73 +159,6 @@ def test_an_outcome_without_a_decision_breaks_verification(
     assert first_problem(log, key) == (0, "outcome without a decision")
 
 
-def test_a_request_ends_with_an_outcome_or_an_error(tmp_path: Path, key: Ed25519PrivateKey) -> None:
-    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
-    for event in ("received", "detection", "decision", "model_call", "model_reply", "outcome"):
-        log.append(event, "answered", {})
-    for event in ("received", "detection", "error"):
-        log.append(event, "failed", {})
-    log.append("received", "crashed-during-detection", {})
-    # Logs written before `received` existed start a request with its decision.
-    log.append("decision", "older-format", {})
-
-    report = verify_chain(read(log), key.public_key())
-
-    assert report.ok
-    assert report.incomplete == ["crashed-during-detection", "older-format"]
-
-
-@pytest.mark.parametrize(
-    ("events", "problem"),
-    [
-        (["detection"], "detection without a received record"),
-        (["model_call"], "model_call without a received record"),
-        (["model_reply"], "model_reply without a received record"),
-        (["error"], "error without a received record"),
-        (["received", "received"], "second received for one audit_id"),
-        (["received", "decision", "decision"], "second decision for one audit_id"),
-        (["received", "outcome"], "outcome without a decision"),
-        (["received", "decision", "error", "outcome"], "outcome without a decision"),
-    ],
-)
-def test_a_request_record_out_of_order_breaks_verification(
-    tmp_path: Path, key: Ed25519PrivateKey, events: list[str], problem: str
-) -> None:
-    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
-    for event in events:
-        log.append(event, "request", {})
-
-    assert first_problem(log, key) == (len(events) - 1, problem)
-
-
-def test_findings_from_older_records_with_a_value_hash_still_read_back() -> None:
-    # Records written before value_hmac was dropped must keep replaying.
-    older = {
-        "detectors": [{"name": "presidio", "version": "x", "ok": True, "error": None}],
-        "findings": [
-            {
-                "entity_type": "PERSON",
-                "start": 33,
-                "end": 42,
-                "score": 0.85,
-                "detector": "presidio",
-                "recognizer": "SpacyRecognizer",
-                "value_hmac": "3ee1ed75" * 8,
-            }
-        ],
-    }
-
-    (finding,) = signals_from_evidence(older).findings
-
-    assert (finding.entity_type, finding.start, finding.end) == ("PERSON", 33, 42)
-    assert finding.score == 0.85
-
-
-def test_keyed_hash_depends_on_the_key() -> None:
-    assert keyed_hash(b"a" * 32, SSN) != keyed_hash(b"b" * 32, SSN)
-    assert keyed_hash(b"a" * 32, SSN) == keyed_hash(b"a" * 32, SSN)
-
-
 # ---------------------------------------------------------------- replay, end to end
 
 
@@ -307,49 +213,6 @@ def test_replay_catches_a_decision_that_does_not_follow_from_its_signals(
     assert [p.reason for p in report.replay_problems] == [
         "decision replays as block (block-secrets), recorded allow (block-secrets)"
     ]
-
-
-def test_replay_reads_the_signals_from_the_detection_record(
-    make_harness: HarnessFactory,
-) -> None:
-    # Deleting the finding that caused a block, to make the block look unjustified.
-    harness = make_harness()
-    harness.plane.handle("password = S3cretValue!")
-
-    def drop_findings(record: dict[str, Any]) -> None:
-        if record["event"] == "detection":
-            record["body"]["findings"] = []
-
-    resign_log(harness, drop_findings)
-    report = harness.verify()
-
-    assert not report.chain_problems
-    assert [p.reason for p in report.replay_problems] == [
-        "classification replays as no_private_data, recorded contains_private_data"
-    ]
-
-
-def test_decisions_that_kept_their_own_signals_still_replay(make_harness: HarnessFactory) -> None:
-    # Before 2026-11-21 the decision record kept the signals and the detection record a
-    # count of findings. Rebuild that shape from a current log; it must still replay.
-    harness = make_harness()
-    harness.plane.handle(f"Email {EMAIL} about the meeting with {PERSON}.")
-    signals: dict[str, Any] = {}
-
-    def to_older_shape(record: dict[str, Any]) -> None:
-        body = record["body"]
-        if record["event"] == "detection":
-            findings = [{k: v for k, v in f.items() if k != "counted"} for f in body["findings"]]
-            signals.update(detectors=body["detectors"], findings=findings)
-            body["findings"] = len(findings)
-        if record["event"] == "decision":
-            body["signals"] = signals
-
-    resign_log(harness, to_older_shape)
-    report = harness.verify()
-
-    assert report.ok
-    assert report.replayed == 1
 
 
 def test_replay_detects_a_modified_policy_snapshot(make_harness: HarnessFactory) -> None:

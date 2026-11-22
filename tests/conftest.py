@@ -97,7 +97,7 @@ class FakeProvider:
         self,
         name: str,
         in_boundary: bool,
-        reply: str | Callable[[str], str] | None = None,
+        reply: str | None = None,
         error: str | None = None,
     ) -> None:
         self.name = name
@@ -110,10 +110,7 @@ class FakeProvider:
         self.prompts.append(prompt)
         if self.error:
             raise ProviderError(self.error)
-        if callable(self._reply):
-            text = self._reply(prompt)
-        else:
-            text = self._reply if self._reply is not None else f"echo: {prompt}"
+        text = self._reply if self._reply is not None else f"echo: {prompt}"
         return ModelReply(text=text, served_by=self.model)
 
     def status(self) -> ProviderStatus:
@@ -139,7 +136,6 @@ class Harness:
     egress: EgressGateway
     sovereign: FakeProvider
     external: FakeProvider
-    detectors: Sequence[Detector]
     runner: DetectorRunner
     data_dir: Path
     policy_path: Path
@@ -222,7 +218,6 @@ def make_harness(tmp_path: Path) -> HarnessFactory:
             egress,
             sovereign,
             external,
-            detectors,
             runner,
             data_dir,
             policy_path,

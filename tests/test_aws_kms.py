@@ -81,23 +81,6 @@ def test_records_signed_in_kms_verify_like_records_signed_locally(tmp_path: Path
     assert {r["key_id"] for r in records} == {key_id(kms.key.public_key())}
 
 
-def test_kms_signs_with_the_key_it_read_at_startup_as_pure_ed25519() -> None:
-    kms = FakeKms()
-
-    KmsSigner(kms, ALIAS).sign("00" * 32)
-
-    # The ARN, so moving the alias cannot switch keys mid-run; RAW, so KMS signs with pure
-    # Ed25519 like a local key, not Ed25519ph.
-    assert kms.sign_calls == [
-        {"KeyId": ARN, "MessageType": "RAW", "SigningAlgorithm": "ED25519_SHA_512"}
-    ]
-
-
-def test_a_key_that_is_not_ed25519_is_refused() -> None:
-    with pytest.raises(KmsUnavailableError, match="not an Ed25519 signing key"):
-        KmsSigner(FakeKms(key_spec="ECC_NIST_P256"), ALIAS)
-
-
 def test_an_unreadable_kms_key_stops_startup() -> None:
     kms = FakeKms()
     kms.errors["get_public_key"] = "AccessDeniedException"

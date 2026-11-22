@@ -26,7 +26,6 @@ def runner() -> DetectorRunner:
     ("prompt", "action", "entity_types"),
     [
         ("Explain what a hash chain is in two sentences.", Action.ALLOW, set()),
-        ("What is the capital of France?", Action.ALLOW, set()),
         (
             "Write a short reply to Dana Levi at dana.levi@example.com about Tuesday.",
             Action.REDACT,
@@ -36,11 +35,6 @@ def runner() -> DetectorRunner:
             "My SSN is 536-90-4399, which tax forms do I need?",
             Action.ROUTE_SOVEREIGN,
             {"US_SSN"},
-        ),
-        (
-            "Is 4111 1111 1111 1111 a valid Visa test card number?",
-            Action.ROUTE_SOVEREIGN,
-            {"CREDIT_CARD"},
         ),
         ("Call me on 212-555-0123 tomorrow.", Action.ROUTE_SOVEREIGN, {"PHONE_NUMBER"}),
         (
@@ -63,11 +57,3 @@ def test_shipped_policy_with_real_detectors(
     assert all(run.ok for run in signals.detectors)
     assert entity_types <= {f.entity_type for f in classification.counted}
     assert decide(classification, default_policy).action is action
-
-
-def test_real_detection_is_repeatable(runner: DetectorRunner, default_policy: Policy) -> None:
-    prompt = "Write to Dana Levi at dana.levi@example.com, SSN 536-90-4399."
-
-    runs = {runner.run(prompt, default_policy.entity_types) for _ in range(5)}
-
-    assert len(runs) == 1

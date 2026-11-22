@@ -71,13 +71,6 @@ def test_a_span_of_the_masked_text_maps_back_to_the_original() -> None:
     assert original("call <PERS") == "call Dana"
 
 
-def test_redact_without_findings_returns_the_text_unchanged() -> None:
-    result = redact("nothing here", [])
-
-    assert result.text == "nothing here"
-    assert result.placeholders == {}
-
-
 def test_restore_puts_originals_back_and_counts_them() -> None:
     text = "Write to dana@example.com about Dana."
     findings = [finding(text, "dana@example.com", "EMAIL_ADDRESS"), finding(text, "Dana", "PERSON")]

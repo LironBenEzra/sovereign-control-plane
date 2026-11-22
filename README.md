@@ -281,7 +281,7 @@ src/control_plane/
   evidence.py                 what goes into a record, and how to read it back
   monitoring.py               alerts and metrics from live status and the audit log (pure)
   main.py                     composition root
-tests/                        218 tests; fakes only at the detector and model boundaries
+tests/                        148 tests; fakes only at the detector and model boundaries
 ui/                           React + Vite + TypeScript
 scripts/                      demo.py, tamper_demo.py, eval_semantic.py, warm_model.py
 deploy/                       ec2.sh, the Compose override and Caddyfile for the hosted demo

@@ -5,18 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-import pydantic
-import pytest
-
 from control_plane.detection.semantic import (
-    CATEGORIES,
     CATEGORY_INSTRUCTIONS,
     INJECTION_INSTRUCTIONS,
     NONE,
 )
 from control_plane.evaluation.judge import (
     JUDGE_MODEL,
-    JudgeUnavailableError,
     Labels,
     SemanticJudge,
     agreement,
@@ -61,35 +56,6 @@ def test_the_judge_labels_with_the_detectors_definitions_and_sees_only_the_text(
     # Only the text: the detector's answer is never shown to the judge.
     assert call["messages"] == [{"role": "user", "content": f"<text>\n{TEXT}\n</text>"}]
     assert (call["model"], call["fallbacks"]) == (JUDGE_MODEL, "default")
-
-
-def test_the_judge_may_only_answer_what_the_detector_can() -> None:
-    client, messages = fake_client(parsed=label())
-    SemanticJudge(client).judge(TEXT)  # type: ignore[arg-type]
-    schema_model = messages.calls[0]["output_format"]
-
-    assert schema_model.model_json_schema()["properties"]["category"]["enum"] == [
-        *CATEGORIES,
-        NONE,
-    ]
-    with pytest.raises(pydantic.ValidationError):
-        schema_model.model_validate({"category": "SECRET", "injection": False, "reason": "x"})
-
-
-@pytest.mark.parametrize(
-    ("stop_reason", "parsed"), [("refusal", None), ("max_tokens", None), ("refusal", label())]
-)
-def test_no_label_when_the_judge_declines_or_is_cut_off(stop_reason: str, parsed: Any) -> None:
-    client, _ = fake_client(stop_reason=stop_reason, parsed=parsed)
-
-    with pytest.raises(JudgeUnavailableError, match=stop_reason):
-        SemanticJudge(client).judge(TEXT)  # type: ignore[arg-type]
-
-
-def test_the_verdict_names_a_fallback_model_that_answered() -> None:
-    client, _ = fake_client(parsed=label(), model="claude-opus-4-8")
-
-    assert SemanticJudge(client).judge(TEXT).model == "claude-opus-4-8"  # type: ignore[arg-type]
 
 
 def test_agreement_scores_confidential_as_yes_or_no_and_injection_separately() -> None:

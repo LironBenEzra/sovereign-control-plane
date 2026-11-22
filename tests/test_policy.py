@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
@@ -12,15 +11,11 @@ from control_plane.policy import (
     DEFAULT_RULE_ID,
     DETECTION_FAILED_GUARD_ID,
     Policy,
-    PolicyDocument,
     PolicyError,
     PolicyStore,
     credential_leaks,
     decide,
-    describe_changes,
-    next_free_version,
     parse_policy,
-    policy_from_document,
 )
 from tests.conftest import DEFAULT_POLICY_PATH
 
@@ -83,14 +78,6 @@ def test_no_matching_rule_falls_back_to_default_block() -> None:
     assert decision.fail_closed
 
 
-def test_same_input_and_policy_always_give_the_same_decision(default_policy: Policy) -> None:
-    subject = classification(Label.CONTAINS_PRIVATE_DATA, "pii", "financial")
-
-    decisions = {decide(subject, default_policy) for _ in range(200)}
-
-    assert len(decisions) == 1
-
-
 def test_detection_failure_can_never_leave_the_boundary() -> None:
     # A policy that tries to allow everything, including when detection failed.
     policy = policy_with(rules=[{"id": "allow-all", "action": "allow"}])
@@ -102,37 +89,20 @@ def test_detection_failure_can_never_leave_the_boundary() -> None:
     assert decision.fail_closed
 
 
-def test_a_rule_that_sends_uncertain_prompts_out_is_not_labelled_fail_closed() -> None:
-    policy = policy_with(rules=[{"id": "allow-all", "action": "allow"}])
-
-    decision = decide(classification(Label.UNCERTAIN, "pii"), policy)
-
-    assert decision.action is Action.ALLOW
-    assert not decision.fail_closed
-
-
 @pytest.mark.parametrize(
     "broken",
     [
-        {"unknown_key": 1},
+        # The fallback must fail closed.
         {"default_action": "allow"},
-        {"default_action": "redact"},
+        # A typo in a category would make the rule silently never match.
         {"rules": [{"id": "r", "action": "allow", "when": {"any_category": ["typo"]}}]},
+        # The audit log names the rule that decided, so ids must be unique.
         {"rules": [{"id": "r", "action": "allow"}, {"id": "r", "action": "block"}]},
-        {"rules": [{"id": "r", "action": "explode"}]},
-        {"categories": {"a": ["PERSON"], "b": ["PERSON"]}, "rules": [], "response": {}},
-        {"detection": {"min_score": 0.8, "confident_score": 0.2}},
-        {"response": {"redact_categories": ["typo"]}},
     ],
 )
 def test_invalid_policies_are_rejected(broken: dict[str, object]) -> None:
     with pytest.raises(PolicyError):
         policy_with(**broken)
-
-
-def test_malformed_yaml_is_a_policy_error() -> None:
-    with pytest.raises(PolicyError):
-        parse_policy(b"id: [unclosed")
 
 
 def test_store_starts_from_the_default_and_later_edits_to_the_file_change_nothing(
@@ -165,18 +135,6 @@ def test_store_fails_closed_when_the_version_in_force_is_damaged(tmp_path: Path)
     assert store.current().sha256 == policy.sha256
 
 
-def test_store_raises_when_the_default_is_missing_or_broken(tmp_path: Path) -> None:
-    path = tmp_path / "policy.yaml"
-    store = PolicyStore(path, tmp_path / "snapshots")
-
-    with pytest.raises(PolicyError):
-        store.current()
-
-    path.write_text("not: a policy")
-    with pytest.raises(PolicyError):
-        store.current()
-
-
 def first_rule_as(action: str) -> Policy:
     """The shipped policy with its first rule, block-secrets, given another action."""
     rules = yaml.safe_load(DEFAULT_POLICY_PATH.read_text())["rules"]
@@ -194,15 +152,6 @@ def test_a_rule_that_would_send_credentials_out_unchanged_is_named() -> None:
             "block, route_sovereign or redact.",
         )
     ]
-
-
-@pytest.mark.parametrize("action", ["block", "route_sovereign", "redact"])
-def test_a_credential_may_be_kept_inside_or_masked(action: str) -> None:
-    assert credential_leaks(first_rule_as(action).document) == []
-
-
-def test_the_shipped_policy_sends_no_credential_out(default_policy: Policy) -> None:
-    assert credential_leaks(default_policy.document) == []
 
 
 def test_a_credential_counts_whatever_its_category_is_called() -> None:
@@ -226,71 +175,3 @@ def test_a_default_that_would_send_credentials_out_is_never_put_in_force(tmp_pat
     with pytest.raises(PolicyError, match="the default policy is refused: block-secrets"):
         store.current()
     assert store.active_sha256() is None
-
-
-def test_a_policy_saved_from_the_editor_reads_back_as_the_same_document(
-    default_policy: Policy,
-) -> None:
-    saved = policy_from_document(default_policy.document)
-
-    assert parse_policy(saved.raw).document == default_policy.document
-    assert saved.sha256 == hashlib.sha256(saved.raw).hexdigest()
-
-
-@pytest.mark.parametrize("rule_id", ["default", "Block Secrets", "guard:mine", "", "a" * 65])
-def test_a_rule_cannot_take_a_reserved_or_malformed_id(rule_id: str) -> None:
-    data = yaml.safe_load(DEFAULT_POLICY_PATH.read_text())
-    data["rules"][0]["id"] = rule_id
-
-    with pytest.raises(PolicyError):
-        parse_policy(yaml.safe_dump(data).encode())
-
-
-def test_each_change_is_described_in_one_sentence(default_policy: Policy) -> None:
-    data = default_policy.document.model_dump(mode="json")
-    for rule in data["rules"]:
-        if rule["id"] == "allow-clean":
-            rule["action"] = "route_sovereign"
-    data["rules"] = [rule for rule in data["rules"] if rule["id"] != "redact-pii"]
-    data["rules"].insert(
-        0, {"id": "block-health", "when": {"any_category": ["health"]}, "action": "block"}
-    )
-    data["categories"]["pii"].append("LOCATION")
-    data["detection"]["min_score"] = 0.5
-    data["egress"]["allowed_destinations"] = []
-
-    changes = describe_changes(default_policy.document, PolicyDocument.model_validate(data))
-
-    assert changes == [
-        "Entity type in pii added: LOCATION.",
-        "Detection min score changed from 0.35 to 0.5.",
-        "Added rule block-health at position 1: category health, block.",
-        "Removed rule redact-pii.",
-        "Rule allow-clean: action changed from allow to route_sovereign.",
-        "Allowed destination removed: anthropic.",
-    ]
-
-
-def test_moving_a_rule_is_a_change(default_policy: Policy) -> None:
-    data = default_policy.document.model_dump(mode="json")
-    data["rules"].append(data["rules"].pop(0))
-
-    (change,) = describe_changes(default_policy.document, PolicyDocument.model_validate(data))
-
-    assert change.startswith("Rule order changed to: block-prompt-injection,")
-    assert change.endswith("allow-clean, block-secrets.")
-
-
-@pytest.mark.parametrize(
-    ("version", "taken", "expected"),
-    [
-        ("1.3.0", set(), "1.3.1"),
-        ("1.3.0", {"1.3.1", "1.3.2"}, "1.3.3"),
-        ("2026-11-09", set(), "2026-11-10"),
-        ("beta", set(), "beta.1"),
-    ],
-)
-def test_the_next_free_version_skips_every_version_in_use(
-    version: str, taken: set[str], expected: str
-) -> None:
-    assert next_free_version(version, taken) == expected

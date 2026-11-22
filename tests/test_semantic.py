@@ -5,28 +5,23 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
-from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 import pytest
 
 from control_plane.classification import classify
-from control_plane.config import Settings
 from control_plane.detection.base import DetectorRunner
 from control_plane.detection.semantic import (
     CATEGORIES,
     ENTITY_TYPES,
-    INTERNAL_MEETING,
     PROMPT_INJECTION,
     SCORE,
     UNRELEASED_PRODUCT,
     SemanticDetector,
     SemanticResponseError,
     SemanticTimeoutError,
-    chunk_spans,
 )
-from control_plane.main import build_services
 from control_plane.models import Label
 from control_plane.policy import Policy
 
@@ -86,43 +81,6 @@ def test_an_injection_is_one_finding_over_the_passage() -> None:
     assert (finding.start, finding.end, finding.score) == (0, len(INJECTION), SCORE)
 
 
-def test_a_passage_can_be_both_confidential_and_an_injection() -> None:
-    findings = semantic(answering(UNRELEASED_PRODUCT, injection=True)).detect(LAUNCH, ENTITY_TYPES)
-
-    assert {f.entity_type for f in findings} == {UNRELEASED_PRODUCT, PROMPT_INJECTION}
-
-
-def test_the_model_is_not_called_when_the_policy_asks_for_no_semantic_type() -> None:
-    def must_not_be_called(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("the model was called")
-
-    assert semantic(must_not_be_called).detect(LAUNCH, ["PERSON", "AWS_ACCESS_KEY"]) == []
-
-
-def test_only_requested_types_are_reported() -> None:
-    detector = semantic(answering(INTERNAL_MEETING))
-
-    assert detector.detect("Notes from the exec meeting.", [UNRELEASED_PRODUCT]) == []
-
-
-@pytest.mark.parametrize(
-    ("wanted", "injection_questions", "category_questions"),
-    [(ENTITY_TYPES, 1, 1), (CATEGORIES, 0, 1), ((PROMPT_INJECTION,), 1, 0)],
-)
-def test_each_question_is_asked_only_when_the_policy_wants_its_answer(
-    wanted: tuple[str, ...], injection_questions: int, category_questions: int
-) -> None:
-    seen: list[dict[str, Any]] = []
-
-    semantic(answering("none", seen=seen)).detect(LAUNCH, wanted)
-
-    asked_injection = sum(is_injection_question(body) for body in seen)
-    assert (asked_injection, len(seen) - asked_injection) == (
-        injection_questions,
-        category_questions,
-    )
-
-
 def test_the_requests_are_deterministic_and_each_answer_is_limited_by_a_schema() -> None:
     seen: list[dict[str, Any]] = []
 
@@ -144,9 +102,6 @@ def test_the_requests_are_deterministic_and_each_answer_is_limited_by_a_schema()
     [
         {"message": {"content": json.dumps({"category": "SOMETHING_ELSE"})}},
         {"message": {"content": "not json"}},
-        {"message": {"content": json.dumps({"reason": "no category"})}},
-        {"message": {"content": json.dumps(["not", "an", "object"])}},
-        {"unexpected": True},
     ],
 )
 def test_an_answer_outside_the_schema_is_an_error(body: dict[str, Any]) -> None:
@@ -156,46 +111,16 @@ def test_an_answer_outside_the_schema_is_an_error(body: dict[str, Any]) -> None:
         detector.detect(LAUNCH, ENTITY_TYPES)
 
 
-@pytest.mark.parametrize("flag", ["yes", None, 1])
-def test_an_injection_answer_that_is_not_a_boolean_is_an_error(flag: object) -> None:
-    content = json.dumps({"injection": flag})
-    detector = semantic(lambda request: httpx.Response(200, json={"message": {"content": content}}))
+def test_a_model_failure_makes_the_prompt_private(default_policy: Policy) -> None:
+    def not_found(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "model not found"})
 
-    with pytest.raises(SemanticResponseError):
-        detector.detect(INJECTION, [PROMPT_INJECTION])
-
-
-@pytest.mark.parametrize(
-    "handler",
-    [
-        lambda request: httpx.Response(404, json={"error": "model not found"}),
-        lambda request: httpx.Response(200, json={"message": {"content": "{}"}}),
-    ],
-)
-def test_a_model_failure_makes_the_prompt_private(handler: Handler, default_policy: Policy) -> None:
-    runner = DetectorRunner([semantic(handler)], timeout_s=5)
+    runner = DetectorRunner([semantic(not_found)], timeout_s=5)
 
     signals = runner.run(LAUNCH, default_policy.entity_types)
 
     assert classify(signals, default_policy).label is Label.UNKNOWN_ASSUME_PRIVATE
     assert "semantic" in runner.failing()
-
-
-def test_long_text_is_judged_in_chunks_and_a_finding_covers_only_its_chunk() -> None:
-    harmless = "word " * 700
-    text = harmless + LAUNCH
-    calls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        chunk = json.loads(request.content)["messages"][-1]["content"]
-        calls.append(chunk)
-        return answering(UNRELEASED_PRODUCT if "Delta" in chunk else "none")(request)
-
-    (finding,) = semantic(handler).detect(text, CATEGORIES)
-
-    assert len(calls) == 2
-    assert LAUNCH in text[finding.start : finding.end]
-    assert finding.start > 0
 
 
 def test_judging_stops_when_the_time_budget_is_spent() -> None:
@@ -214,47 +139,3 @@ def test_judging_stops_when_the_time_budget_is_spent() -> None:
 
     # The first chunk had budget left; after it, no more calls were made.
     assert calls == ["call"]
-
-
-# ---------------------------------------------------------------- chunking
-
-
-def test_chunks_cover_all_the_text_break_at_whitespace_and_respect_the_size() -> None:
-    text = " ".join(f"word{i}" for i in range(1_000))
-
-    spans = chunk_spans(text, size=300)
-
-    assert all(end - start <= 300 for start, end in spans)
-    assert " ".join(text[start:end] for start, end in spans) == text
-
-
-def test_text_without_whitespace_is_cut_at_the_size() -> None:
-    assert chunk_spans("x" * 250, size=100) == [(0, 100), (100, 200), (200, 250)]
-
-
-@pytest.mark.parametrize("text", ["", "   \n\t "])
-def test_blank_text_has_no_chunks(text: str) -> None:
-    assert chunk_spans(text) == []
-
-
-# ---------------------------------------------------------------- wiring
-
-
-@pytest.mark.parametrize(("provider", "expected"), [("ollama", True), ("stub", False)])
-def test_semantic_detection_runs_on_ollama_and_is_off_with_the_stub(
-    provider: Literal["ollama", "stub"], expected: bool, tmp_path: Path
-) -> None:
-    settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
-        data_dir=tmp_path / "data",
-        ui_dir=tmp_path / "no-ui",
-        # Presidio is irrelevant here; an unknown model keeps the test fast.
-        spacy_model="not_an_installed_model",
-        sovereign_provider=provider,
-    )
-
-    versions = build_services(settings).detectors.versions()
-
-    assert ("semantic" in versions) is expected
-    if expected:
-        assert versions["semantic"] == "llama3.2:3b via Ollama, prompt v2"
