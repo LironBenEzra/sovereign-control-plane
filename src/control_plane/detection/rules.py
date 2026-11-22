@@ -112,6 +112,22 @@ RULES: tuple[PatternRule, ...] = (
     ),
 )
 
+# What the rules above find that grants access to something. No policy may send a prompt
+# holding one of these out unchanged (see control_plane.policy.credential_leaks).
+# HEALTH_CONTEXT and the entropy heuristic are not credentials.
+CREDENTIAL_TYPES = frozenset(
+    {
+        "PRIVATE_KEY",
+        "AWS_ACCESS_KEY",
+        "GITHUB_TOKEN",
+        "SLACK_TOKEN",
+        "API_KEY",
+        "JWT",
+        "CONNECTION_STRING",
+        "CREDENTIAL_ASSIGNMENT",
+    }
+)
+
 
 class RuleDetector:
     name = DETECTOR_NAME

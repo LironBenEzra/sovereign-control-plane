@@ -83,7 +83,11 @@ export function App() {
       <header className="masthead">
         <div className="topbar">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true" />
+            <svg className="brand-mark" viewBox="0 0 32 36" aria-hidden="true">
+              <path className="brand-inside" d="M16 2 3 7v10c0 8.5 5.5 14.5 13 17Z" />
+              <path className="brand-outside" d="m16 2 13 5v10c0 8.5-5.5 14.5-13 17Z" />
+              <path className="brand-line" d="M16 6v25" />
+            </svg>
             <div>
               <h1>Sovereign Control Plane</h1>
               <p>Private-data policy enforcement in front of AI models</p>
@@ -102,7 +106,7 @@ export function App() {
             {reachable && health && Object.keys(health.failing_detectors).length > 0 && (
               <span
                 className="status-alert"
-                title={`Failing: ${Object.keys(health.failing_detectors).join(", ")}. Every prompt is treated as private and answers are withheld until it is fixed.`}
+                title={`Failing: ${Object.keys(health.failing_detectors).join(", ")}. Prompts it cannot check are blocked and answers are withheld until it is fixed.`}
               >
                 Detection unavailable
               </span>

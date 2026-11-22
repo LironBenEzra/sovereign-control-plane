@@ -117,7 +117,7 @@ function AboutSection({ document, set }: { document: PolicyDocument; set: Exclud
   return (
     <Section
       title="About this policy"
-      hint="The name and version are written into every decision record, so give each saved change its own version."
+      hint="The name and version are written into every decision record. Each saved change gets the next free version, unless you set one here."
     >
       <div className="field-row">
         <label className="field">

@@ -13,12 +13,14 @@ from control_plane.models import Action, Finding, Label, OutcomeStatus, Signals
 from control_plane.pipeline import (
     EvidenceUnavailableError,
     PolicyConflictError,
+    PolicyRefusedError,
     PolicyUnchangedError,
+    PolicyVersionTakenError,
     RequestFailedError,
     SignalsCache,
     normalize_prompt,
 )
-from control_plane.policy import parse_policy
+from control_plane.policy import next_free_version, parse_policy
 from control_plane.providers.base import ModelReply
 from tests.conftest import (
     AWS_KEY,
@@ -207,11 +209,25 @@ def test_a_prompt_injection_is_blocked_before_any_model(make_harness: HarnessFac
     assert harness.verify().ok
 
 
-def test_semantic_categories_are_not_looked_for_in_the_answer(
+def policy_removing_only_secrets_from_answers() -> str:
+    """The shipped policy, with confidential_business taken out of the answer scan."""
+    shipped = DEFAULT_POLICY_PATH.read_text()
+    edited = shipped.replace(
+        "redact_categories: [secret, confidential_business]", "redact_categories: [secret]"
+    )
+    assert edited != shipped, "the shipped response rule changed; update this helper"
+    return edited
+
+
+def test_semantic_categories_are_not_looked_for_in_the_answer_unless_a_rule_removes_them(
     make_harness: HarnessFactory,
 ) -> None:
     echo = FakeProvider("ollama", in_boundary=True, reply=f"The {UNANNOUNCED} sounds great.")
-    harness = make_harness(semantic=semantic_fake(), sovereign=echo)
+    harness = make_harness(
+        policy_text=policy_removing_only_secrets_from_answers(),
+        semantic=semantic_fake(),
+        sovereign=echo,
+    )
 
     result = harness.plane.handle(CONFIDENTIAL)
 
@@ -225,7 +241,12 @@ def test_a_semantic_failure_stays_reported_after_the_answer(make_harness: Harnes
     # Fails on the prompt only, like a model that times out on it. Before the fix, the
     # output scan ran it again with nothing to look for, and that cleared the failure.
     semantic = KeywordDetector({}, name="semantic", fail_when=lambda text: text == CLEAN)
-    harness = make_harness(semantic=semantic)
+    # Keeps an unchecked prompt inside instead of blocking it, so there is an answer to scan.
+    answered = policy_removing_only_secrets_from_answers().replace(
+        "      label: [unknown_assume_private]\n    action: block",
+        "      label: [unknown_assume_private]\n    action: route_sovereign",
+    )
+    harness = make_harness(policy_text=answered, semantic=semantic)
 
     result = harness.plane.handle(CLEAN)
 
@@ -235,46 +256,80 @@ def test_a_semantic_failure_stays_reported_after_the_answer(make_harness: Harnes
     assert harness.runner.failing() == {"semantic": "RuntimeError"}
 
 
-def test_semantic_categories_are_looked_for_in_the_answer_when_a_rule_removes_them(
+def test_the_shipped_policy_removes_confidential_passages_from_the_answer(
     make_harness: HarnessFactory,
 ) -> None:
-    policy = DEFAULT_POLICY_PATH.read_text().replace(
-        "redact_categories: [secret]", "redact_categories: [secret, confidential_business]"
-    )
+    # Even from the sovereign model, answering the caller who sent the passage.
     echo = FakeProvider("ollama", in_boundary=True, reply=f"The {UNANNOUNCED} sounds great.")
-    harness = make_harness(
-        policy_text=policy,
-        semantic=semantic_fake(),
-        sovereign=echo,
-    )
+    harness = make_harness(semantic=semantic_fake(), sovereign=echo)
 
     result = harness.plane.handle(CONFIDENTIAL)
 
     assert result.response == "The <UNRELEASED_PRODUCT_1> sounds great."
     (reply,) = harness.records("model_reply")
+    assert "semantic" in {run["name"] for run in reply["body"]["detectors"]}
     assert [f["entity_type"] for f in reply["body"]["findings"]] == ["UNRELEASED_PRODUCT"]
     assert reply["body"]["redacted"] == {"UNRELEASED_PRODUCT": 1}
 
 
-def test_detector_failure_keeps_the_prompt_inside(make_harness: HarnessFactory) -> None:
+def test_a_semantic_failure_on_the_answer_withholds_it(make_harness: HarnessFactory) -> None:
+    # Judges the prompt and fails on the answer, like a model that runs out of the
+    # detection time budget on a long answer.
+    semantic = KeywordDetector({}, name="semantic", fail_when=lambda text: text.startswith("echo:"))
+    harness = make_harness(semantic=semantic)
+
+    result = harness.plane.handle(CLEAN)
+
+    assert result.status is OutcomeStatus.WITHHELD
+    assert result.reason == "output_scan_failed"
+    assert result.model_reply is None
+    (reply,) = harness.records("model_reply")
+    failed = [run for run in reply["body"]["detectors"] if not run["ok"]]
+    assert [(run["name"], run["error"]) for run in failed] == [("semantic", "RuntimeError")]
+
+
+def test_detector_failure_blocks_the_prompt_as_an_outage(make_harness: HarnessFactory) -> None:
     broken = KeywordDetector(name="presidio", error=RuntimeError("model crashed"))
     harness = make_harness(detectors=[RuleDetector(), broken])
 
     result = harness.plane.handle(CLEAN)
 
     assert result.classification.label is Label.UNKNOWN_ASSUME_PRIVATE
-    assert result.decision.action is Action.ROUTE_SOVEREIGN
+    assert (result.decision.action, result.decision.rule_id) == (
+        Action.BLOCK,
+        "block-when-detection-failed",
+    )
     assert result.decision.fail_closed
-    assert harness.external.prompts == []
+    # An outage, not a judgement of the prompt: the caller is told to try again.
+    assert (result.status, result.reason, result.retryable) == (
+        OutcomeStatus.BLOCKED,
+        "detection_failed",
+        True,
+    )
+    assert result.response is not None and "a detector failed" in result.response
+    assert harness.external.prompts == harness.sovereign.prompts == []
 
 
-def test_detector_timeout_keeps_the_prompt_inside(make_harness: HarnessFactory) -> None:
+def test_a_secret_found_while_another_detector_failed_is_a_decision(
+    make_harness: HarnessFactory,
+) -> None:
+    broken = KeywordDetector(name="presidio", error=RuntimeError("model crashed"))
+    harness = make_harness(detectors=[RuleDetector(), broken])
+
+    result = harness.plane.handle(f"Deploy with {AWS_KEY}")
+
+    assert result.decision.rule_id == "block-secrets"
+    assert (result.reason, result.retryable) == ("blocked_by_policy", False)
+
+
+def test_detector_timeout_blocks_the_prompt(make_harness: HarnessFactory) -> None:
     harness = make_harness(detectors=[KeywordDetector(delay_s=1.0)], detection_timeout_s=0.05)
 
     result = harness.plane.handle(CLEAN)
 
     assert result.classification.label is Label.UNKNOWN_ASSUME_PRIVATE
-    assert harness.external.prompts == []
+    assert (result.reason, result.retryable) == ("detection_failed", True)
+    assert harness.external.prompts == harness.sovereign.prompts == []
 
 
 def test_low_confidence_evidence_is_treated_as_private(make_harness: HarnessFactory) -> None:
@@ -507,6 +562,9 @@ def test_a_failed_output_scan_withholds_the_answer(make_harness: HarnessFactory)
     # An answer that could not be scanned cannot be masked, so it is not kept.
     assert reply["body"]["masked_reply"] is None
     assert reply["body"]["redacted"] == {}
+    assert reply["body"]["rationale"] == (
+        "A detector failed on the answer, so it could not be checked and is withheld."
+    )
     (outcome,) = harness.records("outcome")
     assert outcome["body"]["model"]["called"] is True
     assert outcome["body"]["response"] is None
@@ -569,6 +627,8 @@ def test_the_model_reply_record_keeps_the_answer_as_it_came_back(
         ],
         "findings": [],
         "redacted": {},
+        "rationale": "The scan found nothing in the answer, so the response rules "
+        "(remove secret and confidential_business) left it unchanged.",
         "masked_reply": f"echo: {sent}",
     }
     # The placeholders are put back after the reply is on record, and the outcome names them.
@@ -595,6 +655,60 @@ def test_private_values_in_an_answer_from_outside_are_masked_in_the_record(
     ]
     assert reply["body"]["redacted"] == {}
     assert EMAIL not in harness.log_text()
+
+
+@pytest.mark.parametrize(
+    ("answer", "rationale"),
+    [
+        (
+            "A hash chain links each record to the one before it.",
+            "The scan found nothing in the answer, so the response rules "
+            "(remove secret and confidential_business) left it unchanged.",
+        ),
+        (
+            f"Ask {EMAIL}.",
+            "The scan found EMAIL_ADDRESS (pii), but the response rules remove only "
+            "secret and confidential_business, so the answer is unchanged.",
+        ),
+        (
+            f"Ask {EMAIL} for {AWS_KEY}.",
+            "The response rules remove secret and confidential_business, so the answer was "
+            "changed: AWS_ACCESS_KEY (secret) masked. "
+            "Not masked: EMAIL_ADDRESS (pii), which they do not remove.",
+        ),
+    ],
+    ids=["nothing-found", "found-but-not-removed", "partly-masked"],
+)
+def test_the_model_reply_record_says_why_the_answer_changed_or_not(
+    make_harness: HarnessFactory, answer: str, rationale: str
+) -> None:
+    harness = make_harness(external=FakeProvider("anthropic", in_boundary=False, reply=answer))
+
+    harness.plane.handle(CLEAN)
+
+    (reply,) = harness.records("model_reply")
+    assert reply["body"]["rationale"] == rationale
+
+
+def test_the_model_reply_record_says_when_the_policy_has_no_response_rules(
+    make_harness: HarnessFactory,
+) -> None:
+    shipped = DEFAULT_POLICY_PATH.read_text()
+    no_rules = shipped.replace(
+        "redact_categories: [secret, confidential_business]", "redact_categories: []"
+    )
+    assert no_rules != shipped, "the shipped response rule changed; update this test"
+    leaky = FakeProvider("anthropic", in_boundary=False, reply=f"Try this key: {AWS_KEY}")
+    harness = make_harness(policy_text=no_rules, external=leaky)
+
+    result = harness.plane.handle(CLEAN)
+
+    assert result.response == f"Try this key: {AWS_KEY}"
+    (reply,) = harness.records("model_reply")
+    assert reply["body"]["rationale"] == (
+        "The scan found AWS_ACCESS_KEY (secret), but the policy has no response rules, "
+        "so the answer is unchanged."
+    )
 
 
 def test_an_answer_from_inside_the_boundary_is_not_kept(make_harness: HarnessFactory) -> None:
@@ -855,9 +969,15 @@ def test_a_blocked_request_records_that_no_model_was_called(make_harness: Harnes
 
 
 # The default policy with clean prompts kept inside instead of sent out.
-STRICTER = DEFAULT_POLICY_PATH.read_text().replace(
-    "    when:\n      label: [no_private_data]\n    action: allow",
-    "    when:\n      label: [no_private_data]\n    action: route_sovereign",
+SHIPPED_VERSION = parse_policy(DEFAULT_POLICY_PATH.read_bytes()).document.version
+# Every saved change needs its own version.
+STRICTER = (
+    DEFAULT_POLICY_PATH.read_text()
+    .replace(f'version: "{SHIPPED_VERSION}"', 'version: "9.0.0"')
+    .replace(
+        "    when:\n      label: [no_private_data]\n    action: allow",
+        "    when:\n      label: [no_private_data]\n    action: route_sovereign",
+    )
 )
 
 
@@ -877,15 +997,18 @@ def test_a_policy_change_is_recorded_and_takes_effect_on_the_next_request(
     assert change["body"] == {
         "policy": {
             "id": "default-sovereign-policy",
-            "version": "1.2.1",
+            "version": "9.0.0",
             "sha256": after.policy.sha256,
         },
         "previous": {
             "id": "default-sovereign-policy",
-            "version": "1.2.1",
+            "version": SHIPPED_VERSION,
             "sha256": before.policy.sha256,
         },
-        "changes": ["Rule allow-clean: action changed from allow to route_sovereign."],
+        "changes": [
+            f'Version changed from "{SHIPPED_VERSION}" to "9.0.0".',
+            "Rule allow-clean: action changed from allow to route_sovereign.",
+        ],
         "note": "Keep everything inside during the audit.",
         "changed_by": "admin-token:test",
         "restored_default": False,
@@ -916,6 +1039,59 @@ def test_a_change_made_from_an_out_of_date_version_is_refused(
 
     assert harness.plane.handle(CLEAN).decision.action is Action.ROUTE_SOVEREIGN
     assert len(harness.records("policy_changed")) == 1
+
+
+def test_a_change_cannot_keep_the_version_in_force(make_harness: HarnessFactory) -> None:
+    harness = make_harness()
+    in_force = harness.policies.current().sha256
+    same_version = STRICTER.replace('version: "9.0.0"', f'version: "{SHIPPED_VERSION}"')
+
+    with pytest.raises(PolicyVersionTakenError) as refused:
+        harness.change_policy(same_version)
+
+    assert refused.value.suggested == next_free_version(SHIPPED_VERSION, ())
+    assert harness.policies.active_sha256() == in_force
+    assert harness.records("policy_changed") == []
+
+
+def test_a_change_that_would_send_credentials_out_is_refused(make_harness: HarnessFactory) -> None:
+    harness = make_harness()
+    in_force = harness.policies.current().sha256
+    secrets_rule = "      any_category: [secret]\n    action: "
+    leaking = STRICTER.replace(secrets_rule + "block", secrets_rule + "allow")
+    assert leaking != STRICTER
+
+    with pytest.raises(PolicyRefusedError) as refused:
+        harness.change_policy(leaking)
+
+    assert [path for path, _ in refused.value.problems] == ["rules.0.action"]
+    assert harness.policies.active_sha256() == in_force
+    assert harness.records("policy_changed") == []
+
+
+def test_a_version_names_one_policy_even_after_going_back_to_the_default(
+    make_harness: HarnessFactory,
+) -> None:
+    harness = make_harness()
+    harness.change_policy(STRICTER)
+    harness.plane.change_policy(
+        harness.policies.default(),
+        base_sha256=harness.policies.active_sha256(),
+        note="Back to the original policy.",
+        changed_by="admin-token:test",
+        restored_default=True,
+    )
+    # A different text under the version STRICTER already has.
+    other = STRICTER.replace("min_score: 0.35", "min_score: 0.4")
+
+    with pytest.raises(PolicyVersionTakenError) as refused:
+        harness.change_policy(other)
+    assert refused.value.suggested == "9.0.1"
+    # The text that version already names may be put back in force.
+    harness.change_policy(STRICTER)
+
+    assert harness.policies.current().document.version == "9.0.0"
+    assert len(harness.records("policy_changed")) == 3
 
 
 def test_a_change_that_cannot_be_recorded_does_not_take_effect(

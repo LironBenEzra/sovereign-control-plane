@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import threading
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Self
@@ -26,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from control_plane.detection.rules import CREDENTIAL_TYPES
 from control_plane.models import Action, Classification, Decision, Label
 
 logger = logging.getLogger(__name__)
@@ -178,6 +180,31 @@ def policy_from_document(document: PolicyDocument) -> Policy:
     return parse_policy(raw)
 
 
+def credential_leaks(document: PolicyDocument) -> list[tuple[str, str]]:
+    """Each rule that allows a category holding a credential, as (path, message).
+
+    `allow` sends the prompt out unchanged, so such a rule would send the credential too.
+    Checked when a policy is saved, not when one is loaded: a policy saved before this
+    check still loads, and the decisions made under it still replay.
+    """
+    leaks: list[tuple[str, str]] = []
+    for index, rule in enumerate(document.rules):
+        if rule.action is not Action.ALLOW:
+            continue
+        for category in rule.when.any_category:
+            if held := sorted(set(document.categories.get(category, ())) & CREDENTIAL_TYPES):
+                leaks.append(
+                    (
+                        f"rules.{index}.action",
+                        f"{rule.id} would send prompts with {category} data out unchanged, "
+                        f"and {category} holds credentials ({', '.join(held)}). Choose block, "
+                        "route_sovereign or redact.",
+                    )
+                )
+                break
+    return leaks
+
+
 def _matches(condition: RuleCondition, classification: Classification) -> bool:
     if condition.label and classification.label not in condition.label:
         return False
@@ -283,7 +310,12 @@ class PolicyStore:
             raw = self._default_path.read_bytes()
         except OSError as exc:
             raise PolicyError(f"cannot read the default policy: {type(exc).__name__}") from exc
-        return parse_policy(raw)
+        policy = parse_policy(raw)
+        # The default is put in force on first start and by a restore, so it is held to the
+        # rule every saved policy is: no credential leaves unchanged.
+        if leaks := credential_leaks(policy.document):
+            raise PolicyError(f"the default policy is refused: {leaks[0][1]}")
+        return policy
 
     def save_snapshot(self, policy: Policy) -> None:
         # Content-addressed, so writing one twice is harmless and evidence can name the
@@ -305,6 +337,21 @@ class PolicyStore:
             raise PolicyError(f"policy version {sha256[:12]} has no snapshot")
         _write_atomically(self._pointer, sha256.encode("ascii") + b"\n")
 
+    def versions(self) -> dict[str, set[str]]:
+        """Each version string ever stored, with the SHA-256 of every text saved under it."""
+        versions: dict[str, set[str]] = {}
+        for path in self._dir.glob("*.yaml"):
+            if not _SHA256.fullmatch(path.stem):
+                continue
+            try:
+                data = yaml.safe_load(path.read_bytes())
+            except (OSError, yaml.YAMLError):
+                # A damaged snapshot cannot be put back in force, so it holds no version.
+                continue
+            if isinstance(data, dict) and isinstance(data.get("version"), str):
+                versions.setdefault(data["version"], set()).add(path.stem)
+        return versions
+
     def _seed(self) -> Policy:
         with self._seed_lock:
             if self.active_sha256() is None:
@@ -312,6 +359,17 @@ class PolicyStore:
                 self.save_snapshot(policy)
                 self.set_active(policy.sha256)
         return self.current()
+
+
+def next_free_version(version: str, taken: Collection[str]) -> str:
+    """The first version after `version` that is not taken: 1.3.0 -> 1.3.1, beta -> beta.1."""
+    match = re.fullmatch(r"(.*?)(\d+)", version)
+    prefix, number = (match.group(1), int(match.group(2))) if match else (f"{version}.", 0)
+    while True:
+        number += 1
+        candidate = f"{prefix}{number}"
+        if candidate not in taken:
+            return candidate
 
 
 def _write_atomically(path: Path, data: bytes) -> None:

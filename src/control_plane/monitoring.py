@@ -144,8 +144,8 @@ def live_alerts(
                 Group.HEALTH,
                 Severity.CRITICAL,
                 f"Detector '{name}' is failing",
-                f"Its most recent run ended in {error}, so the prompts it judged were "
-                "treated as private.",
+                f"Its most recent run ended in {error}. A prompt it cannot check is never "
+                "sent out: the shipped policy blocks it with HTTP 503.",
                 _DETECTOR_ACTIONS.get(name, "Check the control plane logs for this detector."),
             )
         )
@@ -188,7 +188,7 @@ def _model_alerts(sovereign: ModelState, external: ModelState) -> list[Alert]:
                 Severity.CRITICAL,
                 "The local model is not ready",
                 f"{sovereign.status.detail}. Prompts that must stay inside are blocked, and "
-                "the semantic detector cannot run, so every prompt is treated as private.",
+                "the semantic detector cannot run, so every prompt is blocked.",
                 "Check the Ollama container and that the model is pulled "
                 "(docker compose logs ollama ollama-pull).",
             )
@@ -305,7 +305,8 @@ _KINDS: dict[str, _Kind] = {
         Group.SERVICE,
         Severity.WARNING,
         "Detection failures",
-        "A detector failed or timed out, so these prompts were treated as private.",
+        "A detector failed or timed out, so these prompts could not be checked and were "
+        "not sent out: the shipped policy blocks them.",
         "Check the detector named in each entry. A semantic TimeoutError usually means the "
         "prompt was too long to judge within SCP_DETECTION_TIMEOUT_S on this hardware.",
     ),

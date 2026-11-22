@@ -56,13 +56,16 @@ def reply_to_evidence(
     signals: Signals,
     counted: Collection[Finding],
     redacted: Mapping[str, int],
+    *,
+    rationale: str,
     masked_reply: str | None,
 ) -> dict[str, Any]:
     """The model's answer as it came back, and the output scan run on it.
 
     `findings` are the scan's, with positions in the answer as it came back. `redacted`
     counts what the policy's response rules took out of the answer before anything else
-    happened to it, by entity type. Placeholders are put back after this record is
+    happened to it, by entity type, and `rationale` says in a sentence why they changed
+    the answer or left it unchanged. Placeholders are put back after this record is
     written, and the outcome record names them.
 
     `masked_reply` is the answer with every private value the scan found masked, the way
@@ -75,6 +78,7 @@ def reply_to_evidence(
         "detectors": _runs_to_evidence(signals),
         "findings": _findings_to_evidence(signals, counted),
         "redacted": dict(redacted),
+        "rationale": rationale,
         "masked_reply": masked_reply,
     }
 

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from control_plane.api import Services, create_app
+from control_plane.audit.keys import write_public_key
 from control_plane.config import Settings
 from control_plane.detection.rules import RuleDetector
 from control_plane.main import build_services
@@ -44,12 +47,13 @@ def make_client(
     tmp_path: Path,
     admin_token: str | None = ADMIN_TOKEN,
     open_editing: bool = False,
+    ui_dir: Path | None = None,
 ) -> TestClient:
     settings = Settings(
         _env_file=None,  # type: ignore[call-arg]
         data_dir=harness.data_dir,
         policy_path=harness.policy_path,
-        ui_dir=tmp_path / "no-ui",
+        ui_dir=ui_dir or tmp_path / "no-ui",
         max_prompt_chars=MAX_PROMPT_CHARS,
         admin_token=admin_token,
         open_policy_editing=open_editing,
@@ -419,12 +423,47 @@ def test_alerts_report_a_broken_policy_now_and_the_requests_it_blocked(
     assert fixed["status"] == "warning"
 
 
+def verification_alert(client: TestClient) -> dict[str, Any] | None:
+    alerts = client.get("/v1/alerts").json()["alerts"]
+    return next((a for a in alerts if a["id"] == "audit_verification_failed"), None)
+
+
+def test_alerts_see_a_log_edit_that_keeps_its_size_and_modification_time(
+    client: TestClient, harness: Harness
+) -> None:
+    client.post("/v1/inference", json={"prompt": "one"})
+    assert verification_alert(client) is None
+
+    log = harness.audit.path
+    before = log.stat()
+    log.write_text(log.read_text().replace('"action":"allow"', '"action":"block"', 1))
+    os.utime(log, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert (log.stat().st_size, log.stat().st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+
+    alert = verification_alert(client)
+    assert alert is not None
+    assert "content does not match its hash" in alert["detail"]
+
+
+def test_alerts_see_a_replaced_public_key(client: TestClient, harness: Harness) -> None:
+    client.post("/v1/inference", json={"prompt": "one"})
+    assert verification_alert(client) is None
+
+    write_public_key(harness.data_dir / "keys", Ed25519PrivateKey.generate().public_key())
+
+    alert = verification_alert(client)
+    assert alert is not None
+    assert "signed by key" in alert["detail"]
+
+
 # ---------------------------------------------------------------- policy editing
 
 
 def stricter_draft(client: TestClient) -> dict[str, Any]:
     """The policy in force, with clean prompts kept inside instead of sent out."""
-    document = client.get("/v1/policy").json()["document"]
+    info = client.get("/v1/policy").json()
+    document = info["document"]
+    document["version"] = info["next_version"]
     for rule in document["rules"]:
         if rule["id"] == "allow-clean":
             rule["action"] = "route_sovereign"
@@ -455,17 +494,25 @@ def test_changing_the_policy_needs_the_admin_token(harness: Harness, tmp_path: P
 def test_a_saved_policy_is_in_force_audited_and_in_the_history(
     client: TestClient, harness: Harness
 ) -> None:
-    base = client.get("/v1/policy").json()["base_sha256"]
+    before = client.get("/v1/policy").json()
 
     saved = client.put(
         "/v1/policy",
-        json={"document": stricter_draft(client), "base_sha256": base, "note": "Audit week"},
+        json={
+            "document": stricter_draft(client),
+            "base_sha256": before["base_sha256"],
+            "note": "Audit week",
+        },
         headers=ADMIN,
     )
 
     assert saved.status_code == 200
     body = saved.json()
-    assert body["changes"] == ["Rule allow-clean: action changed from allow to route_sovereign."]
+    assert body["policy"]["version"] == before["next_version"]
+    assert body["changes"] == [
+        f'Version changed from "{before["version"]}" to "{before["next_version"]}".',
+        "Rule allow-clean: action changed from allow to route_sovereign.",
+    ]
     answer = client.post("/v1/inference", json={"prompt": "What is a hash chain?"}).json()
     assert answer["decision"]["action"] == "route_sovereign"
     assert answer["policy"]["sha256"] == body["policy"]["sha256"]
@@ -478,6 +525,66 @@ def test_a_saved_policy_is_in_force_audited_and_in_the_history(
     assert entry["changed_by"].startswith("admin-token:")
     assert ADMIN_TOKEN not in harness.log_text()
     assert client.get("/v1/audit/verify").json()["ok"] is True
+
+
+def test_a_save_that_keeps_the_version_is_refused_and_names_a_free_one(
+    client: TestClient,
+) -> None:
+    info = client.get("/v1/policy").json()
+    draft = stricter_draft(client)
+    draft["version"] = info["version"]
+
+    refused = client.put(
+        "/v1/policy",
+        json={"document": draft, "base_sha256": info["base_sha256"], "note": "x"},
+        headers=ADMIN,
+    )
+
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == (
+        f"Version {info['version']} already names another policy, so this change needs "
+        f"its own version, such as {info['next_version']}."
+    )
+    assert client.get("/v1/policy").json()["sha256"] == info["sha256"]
+
+
+def test_a_policy_that_would_send_credentials_out_is_refused_and_says_where(
+    client: TestClient,
+) -> None:
+    info = client.get("/v1/policy").json()
+    draft = stricter_draft(client)
+    draft["rules"][0]["action"] = "allow"
+
+    checked = client.post("/v1/policy/check", json={"document": draft}).json()
+    refused = client.put(
+        "/v1/policy",
+        json={"document": draft, "base_sha256": info["base_sha256"], "note": "x"},
+        headers=ADMIN,
+    )
+
+    assert checked["valid"] is False
+    assert [e["path"] for e in checked["errors"]] == ["rules.0.action"]
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["errors"] == checked["errors"]
+    assert checked["errors"][0]["message"].startswith("block-secrets would send prompts with")
+    assert client.get("/v1/policy").json()["sha256"] == info["sha256"]
+
+
+def test_the_next_version_offered_skips_versions_already_used(client: TestClient) -> None:
+    first = client.get("/v1/policy").json()
+    draft = stricter_draft(client)
+    client.put(
+        "/v1/policy",
+        json={"document": draft, "base_sha256": first["base_sha256"], "note": "x"},
+        headers=ADMIN,
+    )
+    base = client.get("/v1/policy").json()["base_sha256"]
+    client.post("/v1/policy/restore-default", json={"base_sha256": base}, headers=ADMIN)
+
+    restored = client.get("/v1/policy").json()
+
+    assert restored["version"] == first["version"]
+    assert restored["next_version"] not in {first["version"], draft["version"]}
 
 
 def test_with_open_editing_anyone_changes_the_policy_as_a_visitor(
@@ -663,8 +770,17 @@ def test_a_missing_ner_model_starts_degraded_and_never_answers(tmp_path: Path) -
 
     response = client.post("/v1/inference", json={"prompt": "What is a hash chain?"})
     assert response.status_code == 503
+    assert response.headers["retry-after"] == "30"
     assert response.json()["decision"]["fail_closed"] is True
-    assert response.json()["outcome"] == "withheld"
+    assert (response.json()["outcome"], response.json()["outcome_reason"]) == (
+        "blocked",
+        "detection_failed",
+    )
+
+    # Both alerts: the detector failing now, and the request it could not check.
+    alerts = {a["id"]: a for a in client.get("/v1/alerts").json()["alerts"]}
+    assert alerts["detector_failing:presidio"]["severity"] == "critical"
+    assert alerts["detection_failures"]["count"] == 1
 
 
 def test_without_an_api_key_the_external_model_is_anthropic_and_not_ready(
@@ -701,3 +817,20 @@ def test_client_id_header_is_recorded_only_when_well_formed(
 
     claimed = [r["body"]["request"]["client_id_claimed"] for r in harness.records("decision")]
     assert claimed == ["billing-app", None]
+
+
+def test_the_ui_page_is_revalidated_and_its_hashed_assets_are_not(
+    harness: Harness, tmp_path: Path
+) -> None:
+    ui = tmp_path / "ui"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text('<script src="/assets/index-abc123.js"></script>')
+    (ui / "assets" / "index-abc123.js").write_text("console.log(1)")
+    client = make_client(harness, tmp_path, ui_dir=ui)
+
+    page = client.get("/")
+    script = client.get("/assets/index-abc123.js")
+
+    assert (page.status_code, page.headers["cache-control"]) == (200, "no-cache")
+    assert script.status_code == 200
+    assert "cache-control" not in script.headers

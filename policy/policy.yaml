@@ -1,13 +1,16 @@
 # Sovereign control plane policy.
 #
-# This file is the only place rules live. It is re-read on every request, so an edit
-# takes effect immediately. Every audit record names the SHA-256 of the exact text that
-# was in force, and a copy of each version is kept under data/policies/.
+# The shipped default. On first start it is copied into data/policies/ as a snapshot named
+# by its SHA-256, and from then on the policy in force changes only through the Policy tab
+# or PUT /v1/policy, each change under a new version. Editing this file changes nothing in
+# force: "Back to the original policy" is what puts this file back. Every audit record
+# names the SHA-256 of the exact text that was in force.
 #
-# If this file is missing or invalid, every request is blocked until it is fixed.
+# If the policy in force is missing, modified on disk or invalid, every request is blocked
+# until it is restored.
 
 id: default-sovereign-policy
-version: "1.2.1"
+version: "1.4.0"
 description: Keep secrets and prompt injections out of every model, keep regulated data and confidential business content in the boundary, redact contact PII.
 
 # What counts as private data: category -> entity types the detectors look for.
@@ -74,6 +77,12 @@ rules:
       any_category: [prompt_injection]
     action: block
 
+  - id: block-when-detection-failed
+    description: A detector failed or ran out of time, so the prompt could not be checked. It is not sent to any model.
+    when:
+      label: [unknown_assume_private]
+    action: block
+
   - id: keep-regulated-in-boundary
     description: Regulated data (government IDs, financial, health) is answered by the sovereign model only.
     when:
@@ -93,9 +102,9 @@ rules:
     action: route_sovereign
 
   - id: protect-when-unsure
-    description: Detection failed or found only low-confidence evidence, so the prompt is treated as private.
+    description: Detection found only low-confidence evidence, so the prompt is treated as private.
     when:
-      label: [unknown_assume_private, uncertain]
+      label: [uncertain]
     action: route_sovereign
 
   - id: redact-pii
@@ -121,7 +130,9 @@ egress:
 
 response:
   # Categories removed from a model's answer before it is returned to the caller.
-  redact_categories: [secret]
+  # confidential_business is found by the semantic detector, so listing it has the local
+  # model judge every answer too, and a finding removes the whole passage it judged.
+  redact_categories: [secret, confidential_business]
   # After "redact", put the original values back into the answer, inside the boundary.
   restore_placeholders: true
 

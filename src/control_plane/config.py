@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     ui_dir: Path = Path("ui/dist")
 
     max_prompt_chars: int = 20_000
-    detection_timeout_s: float = 15.0
+    # For the prompt and again for the answer. The local LLM judges about 7,500
+    # characters in this time on a laptop CPU; a longer text counts as a detector failure.
+    detection_timeout_s: float = 30.0
     spacy_model: str = "en_core_web_md"
 
     # The in-boundary model. "stub" is a labelled stand-in for running without Ollama.

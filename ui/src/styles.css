@@ -202,15 +202,27 @@ button {
   font-size: 13.5px;
 }
 
-/* The product's own mark: a boundary with one gate in it. */
+/* The product's own mark: a shield split by the trust boundary, inside on the left and
+   outside on the right, in the colours those sides have everywhere else. */
 .brand-mark {
   flex: none;
-  width: 36px;
+  width: 32px;
   height: 36px;
-  border: 2px dashed var(--band-inside);
-  border-radius: var(--radius);
-  background: linear-gradient(var(--brand), var(--brand)) center / 10px 10px no-repeat;
-  box-shadow: 0 0 24px -4px rgb(201 139 196 / 0.6);
+  filter: drop-shadow(0 0 10px rgb(201 139 196 / 0.45));
+}
+
+.brand-inside {
+  fill: var(--band-inside);
+}
+
+.brand-outside {
+  fill: var(--band-outside);
+}
+
+.brand-line {
+  stroke: var(--band);
+  stroke-width: 2;
+  stroke-dasharray: 3 2.5;
 }
 
 .status {
@@ -1440,6 +1452,13 @@ th {
 .audit-step-prompt-none {
   color: var(--ink-2);
   font-family: var(--sans);
+}
+
+/* The record's own sentence for why the step did what it did. */
+.audit-step-why {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-2);
 }
 
 .audit-step-seq {

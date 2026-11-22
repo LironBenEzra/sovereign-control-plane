@@ -15,8 +15,10 @@ from control_plane.policy import (
     PolicyDocument,
     PolicyError,
     PolicyStore,
+    credential_leaks,
     decide,
     describe_changes,
+    next_free_version,
     parse_policy,
     policy_from_document,
 )
@@ -48,7 +50,13 @@ def policy_with(**changes: object) -> Policy:
             "keep-regulated-in-boundary",
         ),
         (Label.UNCERTAIN, ("pii",), Action.ROUTE_SOVEREIGN, "protect-when-unsure"),
-        (Label.UNKNOWN_ASSUME_PRIVATE, (), Action.ROUTE_SOVEREIGN, "protect-when-unsure"),
+        (Label.UNKNOWN_ASSUME_PRIVATE, (), Action.BLOCK, "block-when-detection-failed"),
+        (
+            Label.UNKNOWN_ASSUME_PRIVATE,
+            ("government_id",),
+            Action.BLOCK,
+            "block-when-detection-failed",
+        ),
     ],
 )
 def test_default_policy_decisions(
@@ -169,6 +177,57 @@ def test_store_raises_when_the_default_is_missing_or_broken(tmp_path: Path) -> N
         store.current()
 
 
+def first_rule_as(action: str) -> Policy:
+    """The shipped policy with its first rule, block-secrets, given another action."""
+    rules = yaml.safe_load(DEFAULT_POLICY_PATH.read_text())["rules"]
+    rules[0]["action"] = action
+    return policy_with(rules=rules)
+
+
+def test_a_rule_that_would_send_credentials_out_unchanged_is_named() -> None:
+    assert credential_leaks(first_rule_as("allow").document) == [
+        (
+            "rules.0.action",
+            "block-secrets would send prompts with secret data out unchanged, and secret "
+            "holds credentials (API_KEY, AWS_ACCESS_KEY, CONNECTION_STRING, "
+            "CREDENTIAL_ASSIGNMENT, GITHUB_TOKEN, JWT, PRIVATE_KEY, SLACK_TOKEN). Choose "
+            "block, route_sovereign or redact.",
+        )
+    ]
+
+
+@pytest.mark.parametrize("action", ["block", "route_sovereign", "redact"])
+def test_a_credential_may_be_kept_inside_or_masked(action: str) -> None:
+    assert credential_leaks(first_rule_as(action).document) == []
+
+
+def test_the_shipped_policy_sends_no_credential_out(default_policy: Policy) -> None:
+    assert credential_leaks(default_policy.document) == []
+
+
+def test_a_credential_counts_whatever_its_category_is_called() -> None:
+    data = yaml.safe_load(DEFAULT_POLICY_PATH.read_text())
+    data["categories"]["secret"].remove("AWS_ACCESS_KEY")
+    data["categories"]["deploy_keys"] = ["AWS_ACCESS_KEY"]
+    data["rules"].insert(
+        0, {"id": "allow-deploy-keys", "action": "allow", "when": {"any_category": ["deploy_keys"]}}
+    )
+
+    leaks = credential_leaks(parse_policy(yaml.safe_dump(data).encode()).document)
+
+    assert [path for path, _ in leaks] == ["rules.0.action"]
+
+
+def test_a_default_that_would_send_credentials_out_is_never_put_in_force(tmp_path: Path) -> None:
+    path = tmp_path / "policy.yaml"
+    path.write_bytes(first_rule_as("allow").raw)
+    store = PolicyStore(path, tmp_path / "snapshots")
+
+    with pytest.raises(PolicyError, match="the default policy is refused: block-secrets"):
+        store.current()
+    assert store.active_sha256() is None
+
+
 def test_a_policy_saved_from_the_editor_reads_back_as_the_same_document(
     default_policy: Policy,
 ) -> None:
@@ -220,3 +279,18 @@ def test_moving_a_rule_is_a_change(default_policy: Policy) -> None:
 
     assert change.startswith("Rule order changed to: block-prompt-injection,")
     assert change.endswith("allow-clean, block-secrets.")
+
+
+@pytest.mark.parametrize(
+    ("version", "taken", "expected"),
+    [
+        ("1.3.0", set(), "1.3.1"),
+        ("1.3.0", {"1.3.1", "1.3.2"}, "1.3.3"),
+        ("2026-11-09", set(), "2026-11-10"),
+        ("beta", set(), "beta.1"),
+    ],
+)
+def test_the_next_free_version_skips_every_version_in_use(
+    version: str, taken: set[str], expected: str
+) -> None:
+    assert next_free_version(version, taken) == expected

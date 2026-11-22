@@ -151,6 +151,8 @@ export interface PolicyInfo {
   document: PolicyDocument | null;
   id?: string;
   version?: string;
+  // The first version no stored policy uses yet: what a saved change gets by default.
+  next_version?: string;
   sha256?: string;
 }
 

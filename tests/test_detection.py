@@ -5,7 +5,7 @@ import pytest
 from control_plane.classification import classify
 from control_plane.detection.base import DetectorRunner
 from control_plane.detection.presidio import ModelNotInstalledError, PresidioDetector
-from control_plane.detection.rules import RuleDetector
+from control_plane.detection.rules import CREDENTIAL_TYPES, RULES, RuleDetector
 from control_plane.models import DetectorRun, Finding, Label, Signals
 from control_plane.policy import Policy
 from tests.conftest import AWS_KEY, EMAIL, PERSON, WEAK_PHONE, KeywordDetector
@@ -62,6 +62,11 @@ def test_rule_detector_finds(text: str, entity_type: str, default_policy: Policy
 )
 def test_rule_detector_ignores_ordinary_text(text: str, default_policy: Policy) -> None:
     assert RuleDetector().detect(text, default_policy.entity_types) == []
+
+
+def test_every_rule_but_the_health_terms_finds_a_credential() -> None:
+    # A new credential rule must be listed too, or a policy could allow its value out.
+    assert {rule.entity_type for rule in RULES} - {"HEALTH_CONTEXT"} == CREDENTIAL_TYPES
 
 
 def test_rule_detector_only_reports_requested_entity_types() -> None:

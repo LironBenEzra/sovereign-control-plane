@@ -89,6 +89,15 @@ export function PolicyView({ onOpenAuditLog }: Props) {
     setPanel(null);
   }
 
+  function openSavePanel() {
+    // Each saved change needs its own version; the server refuses one already in use.
+    // Unless the editor chose a version, the draft gets the next free one.
+    if (draft && info?.next_version && draft.version === info.version) {
+      setDraft({ ...draft, version: info.next_version });
+    }
+    setPanel("save");
+  }
+
   async function afterChange(result: PolicyChangeResult) {
     storeAdminToken(token);
     stopEditing();
@@ -219,7 +228,6 @@ export function PolicyView({ onOpenAuditLog }: Props) {
             needsToken={needsToken}
             tokenField={tokenField}
             onTokenRejected={tokenRejected}
-            onUseVersion={(version) => setDraft({ ...draft, version })}
             onReload={() => {
               stopEditing();
               void load();
@@ -269,7 +277,7 @@ export function PolicyView({ onOpenAuditLog }: Props) {
                 type="button"
                 className="primary"
                 disabled={!draftValid || changes.length === 0}
-                onClick={() => setPanel("save")}
+                onClick={openSavePanel}
               >
                 Save
               </button>
@@ -300,11 +308,6 @@ function fieldName(error: FieldError, draft: PolicyDocument): string {
     return [rule, ...rest].join(", ").replaceAll("_", " ");
   }
   return error.path.split(".").join(", ").replaceAll("_", " ");
-}
-
-function nextPatchVersion(version: string): string | null {
-  const match = /^(.*?)(\d+)$/.exec(version);
-  return match ? `${match[1]}${Number(match[2]) + 1}` : null;
 }
 
 function AdminTokenField({ token, onChange }: { token: string; onChange: (token: string) => void }) {
@@ -352,7 +355,6 @@ function SavePanel({
   needsToken,
   tokenField,
   onTokenRejected,
-  onUseVersion,
   onReload,
   onSaved,
   onCancel,
@@ -364,7 +366,6 @@ function SavePanel({
   needsToken: boolean;
   tokenField: ReactNode;
   onTokenRejected: () => void;
-  onUseVersion: (version: string) => void;
   onReload: () => void;
   onSaved: (result: PolicyChangeResult) => void;
   onCancel: () => void;
@@ -372,8 +373,6 @@ function SavePanel({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ChangeErrorState | null>(null);
-  const sameVersion = info.valid && draft.version === info.version;
-  const suggested = sameVersion ? nextPatchVersion(draft.version) : null;
 
   async function submit() {
     setBusy(true);
@@ -398,17 +397,6 @@ function SavePanel({
           <li key={index}>{change}</li>
         ))}
       </ul>
-      {sameVersion && (
-        <p className="hint-bad">
-          The version is still {draft.version}, the same as the policy in force, so the audit log
-          will show two different policies with one version.{" "}
-          {suggested && (
-            <button type="button" className="link" onClick={() => onUseVersion(suggested)}>
-              Use {suggested}
-            </button>
-          )}
-        </p>
-      )}
       <label className="field">
         <span className="field-label">Why are you changing it? This goes into the audit log.</span>
         {/* The reason is the one thing left to fill in, so the cursor goes there. */}

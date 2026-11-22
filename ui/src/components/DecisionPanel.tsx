@@ -158,7 +158,26 @@ function Boundary({ result, inspected }: { result: InferenceResult; inspected: s
 function flowSteps(result: InferenceResult, inspected: string): FlowStep[] {
   const { model, forwarded_prompt: sent, model_reply: reply, response } = result;
   if (model === null || sent === null) {
-    return [{ side: "inside", title: "No model was called", body: null }];
+    // A model without a forwarded prompt is the sovereign model failing: it was called, and
+    // the outcome reason above says why it did not answer.
+    const steps: FlowStep[] = [
+      model === null
+        ? { side: "inside", title: "No model was called", body: null }
+        : {
+            side: model.in_boundary ? "inside" : "outside",
+            title: `${modelName(model)} was called and did not answer`,
+            body: null,
+          },
+    ];
+    // What the caller gets instead of an answer: the policy's block message, or why none came.
+    if (response !== null) {
+      steps.push({
+        side: "inside",
+        title: "Returned to you",
+        body: <pre className="block block-response">{response}</pre>,
+      });
+    }
+    return steps;
   }
 
   const steps: FlowStep[] = [];
@@ -172,10 +191,16 @@ function flowSteps(result: InferenceResult, inspected: string): FlowStep[] {
     });
   }
 
-  const target = model.stub ? `${model.provider}, a stub` : `${model.provider}, ${model.model}`;
-  steps.push({ side, title: `Sent to ${target}`, body: <Placeholders text={sent} /> });
+  steps.push({ side, title: `Sent to ${modelName(model)}`, body: <Placeholders text={sent} /> });
 
-  if (side === "outside") {
+  if (result.outcome === "withheld") {
+    // The server does not return a withheld answer, so there is no text to show.
+    steps.push({
+      side: "inside",
+      title: "An answer came back, but scanning it failed, so it was withheld",
+      body: null,
+    });
+  } else if (side === "outside") {
     steps.push(
       reply === null
         ? { side, title: "No answer came back", body: null }
@@ -197,6 +222,10 @@ function flowSteps(result: InferenceResult, inspected: string): FlowStep[] {
     });
   }
   return steps;
+}
+
+function modelName(model: NonNullable<InferenceResult["model"]>): string {
+  return model.stub ? `${model.provider}, a stub` : `${model.provider}, ${model.model}`;
 }
 
 function FlowCard({ number, step }: { number: string; step: FlowStep }) {

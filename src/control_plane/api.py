@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import threading
 from collections.abc import Sequence
@@ -20,9 +21,10 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.types import Scope
 
 from control_plane.audit.chain import EVENT_DECISION, EVENT_POLICY_CHANGED, AuditRecord
 from control_plane.audit.keys import PUBLIC_KEY_FILE, load_public_key
@@ -40,7 +42,9 @@ from control_plane.pipeline import (
     InferenceResult,
     PolicyChange,
     PolicyConflictError,
+    PolicyRefusedError,
     PolicyUnchangedError,
+    PolicyVersionTakenError,
     Receipt,
     RequestFailedError,
     Verdict,
@@ -50,7 +54,9 @@ from control_plane.policy import (
     PolicyDocument,
     PolicyError,
     PolicyStore,
+    credential_leaks,
     describe_changes,
+    next_free_version,
     policy_from_document,
 )
 from control_plane.providers.base import ModelProvider
@@ -296,7 +302,7 @@ def create_app(services: Services) -> FastAPI:
         return JSONResponse(status_code=503 if degraded else 200, content=body)
 
     if settings.ui_dir.is_dir():
-        app.mount("/", StaticFiles(directory=settings.ui_dir, html=True), name="ui")
+        app.mount("/", _UiFiles(directory=settings.ui_dir, html=True), name="ui")
 
     return app
 
@@ -404,10 +410,13 @@ def _add_policy_routes(app: FastAPI, services: Services) -> None:
             "document": policy.document.model_dump(mode="json") if policy else None,
         }
         if policy is not None:
+            version = policy.document.version
             body |= {
                 "id": policy.document.id,
-                "version": policy.document.version,
+                "version": version,
                 "sha256": policy.sha256,
+                # What a saved change is given unless the editor picks another version.
+                "next_version": next_free_version(version, services.policies.versions()),
             }
         return body
 
@@ -422,6 +431,8 @@ def _add_policy_routes(app: FastAPI, services: Services) -> None:
             document = PolicyDocument.model_validate(draft.document)
         except ValidationError as exc:
             return {"valid": False, "errors": _policy_errors(exc), "changes": []}
+        if leaks := credential_leaks(document):
+            return {"valid": False, "errors": _field_errors(leaks), "changes": []}
         current, _ = _load_policy(services.policies)
         changes = describe_changes(current.document if current else None, document)
         return {"valid": True, "errors": [], "changes": changes}
@@ -551,10 +562,11 @@ def _model_state(provider: ModelProvider) -> ModelState:
 
 
 class _VerificationCache:
-    """Verifies the audit log again only when the file has changed since the last check.
+    """Verifies the audit log again only when what it checks has changed since last time.
 
     The Alerts tab polls, and verification checks every signature and replays every
-    decision, so repeating it for an unchanged log would be wasted work.
+    decision, so repeating it for unchanged files would be wasted work. Hashing the files
+    costs milliseconds by comparison.
     """
 
     def __init__(self, log_path: Path, public_key_path: Path, policy_dir: Path) -> None:
@@ -562,16 +574,26 @@ class _VerificationCache:
         self._public_key_path = public_key_path
         self._policy_dir = policy_dir
         self._lock = threading.Lock()
-        self._stamp: tuple[int, int] | None = None
+        self._stamp: str | None = None
         self._report: Report | None = None
 
+    def _content_stamp(self) -> str:
+        # The contents, not size and modification time: whoever can edit the log can also
+        # keep its size and set its time back, and the cached "intact" would hide the edit.
+        stamp = hashlib.sha256()
+        paths = [self._log_path, self._public_key_path, *sorted(self._policy_dir.glob("*.yaml"))]
+        for path in paths:
+            try:
+                content = hashlib.sha256(path.read_bytes()).digest()
+            except FileNotFoundError:
+                content = b"missing"
+            stamp.update(path.name.encode() + b"\0" + content)
+        return stamp.hexdigest()
+
     def report(self) -> Report:
-        try:
-            stat = self._log_path.stat()
-            stamp: tuple[int, int] | None = (stat.st_size, stat.st_mtime_ns)
-        except FileNotFoundError:
-            stamp = None
         with self._lock:
+            # Hashed before verifying: a write in between only makes the next poll verify again.
+            stamp = self._content_stamp()
             if self._report is None or stamp != self._stamp:
                 public_key = load_public_key(self._public_key_path)
                 self._report = verify_log(self._log_path, public_key, self._policy_dir)
@@ -650,6 +672,11 @@ def _policy_errors(exc: ValidationError) -> list[dict[str, str]]:
     ]
 
 
+def _field_errors(problems: list[tuple[str, str]]) -> list[dict[str, str]]:
+    """(path, message) pairs in the shape of `_policy_errors`, so a form shows them alike."""
+    return [{"path": path, "message": message} for path, message in problems]
+
+
 def _change_policy(
     control_plane: ControlPlane,
     policy: Policy,
@@ -673,9 +700,20 @@ def _change_policy(
             detail="The policy was changed by someone else after you loaded it. Reload it, "
             "then make your change again.",
         ) from exc
+    except PolicyRefusedError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "The policy is not valid.", "errors": _field_errors(exc.problems)},
+        ) from exc
     except PolicyUnchangedError as exc:
         raise HTTPException(
             status_code=422, detail="This is already the policy in force: nothing to save."
+        ) from exc
+    except PolicyVersionTakenError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Version {exc.version} already names another policy, so this change needs "
+            f"its own version, such as {exc.suggested}.",
         ) from exc
 
 
@@ -769,6 +807,27 @@ def _default_policy(policies: PolicyStore) -> tuple[Policy | None, str | None]:
         return policies.default(), None
     except PolicyError as exc:
         return None, str(exc).splitlines()[0]
+
+
+class _UiFiles(StaticFiles):
+    """The web UI. Its page is revalidated on every visit, so a deploy shows at once.
+
+    Without Cache-Control a browser may reuse an old index.html for a while, and with it the
+    old build it names. Scripts and styles have a content hash in their names, so they may
+    stay cached.
+    """
+
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if os.fspath(full_path).endswith(".html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def _active_sha256(policies: PolicyStore) -> str | None:

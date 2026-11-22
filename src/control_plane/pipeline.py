@@ -68,7 +68,15 @@ from control_plane.models import (
     OutcomeStatus,
     Signals,
 )
-from control_plane.policy import Policy, PolicyError, PolicyStore, decide, describe_changes
+from control_plane.policy import (
+    Policy,
+    PolicyError,
+    PolicyStore,
+    credential_leaks,
+    decide,
+    describe_changes,
+    next_free_version,
+)
 from control_plane.providers.base import ModelProvider, ModelReply, ProviderError
 
 logger = logging.getLogger(__name__)
@@ -93,6 +101,10 @@ _WITHHELD_MESSAGE = (
     "detector failed, so it was withheld. Try again later."
 )
 _EXTERNAL_FAILED_MESSAGE = "The external model did not return an answer. Try again later."
+_DETECTION_FAILED_MESSAGE = (
+    "This request was blocked because a detector failed or ran out of time, so the prompt "
+    "could not be checked. No model was called. Try again later, or send a shorter prompt."
+)
 
 # Invisible characters that can split a word to slip past pattern matching.
 _INVISIBLE = dict.fromkeys(map(ord, "\u00ad\u200b\u200c\u200d\u2060\ufeff"))
@@ -283,6 +295,8 @@ class _ReplyScan:
     counted: tuple[Finding, ...]
     # What the response rules took out. Its text is what the caller may be shown.
     redaction: Redaction
+    # Why the response rules changed the answer, or left it as the model wrote it.
+    rationale: str
 
     @property
     def ok(self) -> bool:
@@ -293,10 +307,22 @@ class _ReplyScan:
         if not self.ok:
             # The answer is withheld whole: nothing was redacted from it, and it cannot be
             # masked, so it is not kept.
-            return reply_to_evidence(len(reply), self.signals, self.counted, {}, None)
+            return reply_to_evidence(
+                len(reply),
+                self.signals,
+                self.counted,
+                {},
+                rationale=self.rationale,
+                masked_reply=None,
+            )
         masked = redact(reply, _private(self.counted)).text if external else None
         return reply_to_evidence(
-            len(reply), self.signals, self.counted, self.redaction.by_entity, masked
+            len(reply),
+            self.signals,
+            self.counted,
+            self.redaction.by_entity,
+            rationale=self.rationale,
+            masked_reply=masked,
         )
 
 
@@ -310,6 +336,24 @@ class PolicyConflictError(Exception):
 
 class PolicyUnchangedError(Exception):
     """The new policy is the one already in force."""
+
+
+class PolicyRefusedError(Exception):
+    """The new policy would send a credential out unchanged."""
+
+    def __init__(self, problems: list[tuple[str, str]]) -> None:
+        super().__init__("; ".join(message for _, message in problems))
+        # (path, message) for each rule, such as ("rules.0.action", "block-secrets would ...")
+        self.problems = problems
+
+
+class PolicyVersionTakenError(Exception):
+    """The new policy reuses a version that already names a different policy text."""
+
+    def __init__(self, version: str, suggested: str) -> None:
+        super().__init__(f"version {version} already names another policy")
+        self.version = version
+        self.suggested = suggested
 
 
 @dataclass(frozen=True)
@@ -465,7 +509,14 @@ class ControlPlane:
             )
 
             stage = "enforcement"
-            enforcement = self._enforce(audit_id, text, masked, decision, policy)
+            enforcement = self._enforce(
+                audit_id,
+                text,
+                masked,
+                decision,
+                policy,
+                detection_failed=_blocked_for_failed_detection(decision, classification, policy),
+            )
         except EvidenceUnavailableError:
             # The log cannot be written, so the failure cannot be recorded in it either.
             raise
@@ -534,6 +585,9 @@ class ControlPlane:
         before the new version takes effect, so no policy is ever in force unrecorded: if
         the write fails, `EvidenceUnavailableError` is raised and nothing changes.
         """
+        # PolicyStore.default() holds the shipped policy to the same rule.
+        if leaks := credential_leaks(policy.document):
+            raise PolicyRefusedError(leaks)
         with self._change_lock:
             active = self._policies.active_sha256()
             if active != base_sha256:
@@ -546,6 +600,13 @@ class ControlPlane:
             # then saving it again (as "restore default" does) is the repair.
             if previous is not None and previous.sha256 == policy.sha256:
                 raise PolicyUnchangedError
+            if not restored_default:
+                # Records name a policy by version, so a version must name one text only.
+                # The shipped default is exempt: putting it back is the repair path.
+                versions = self._policies.versions()
+                version = policy.document.version
+                if versions.get(version, set()) - {policy.sha256}:
+                    raise PolicyVersionTakenError(version, next_free_version(version, versions))
             changes = describe_changes(previous.document if previous else None, policy.document)
 
             self._policies.save_snapshot(policy)
@@ -636,8 +697,22 @@ class ControlPlane:
         masked: Redaction,
         decision: Decision,
         policy: Policy,
+        *,
+        detection_failed: bool = False,
     ) -> _Enforcement:
-        """Carry out the decision. `masked` is the prompt as the detection record keeps it."""
+        """Carry out the decision. `masked` is the prompt as the detection record keeps it.
+
+        `detection_failed`: the block was caused only by a failed detector.
+        """
+        if decision.action is Action.BLOCK and detection_failed:
+            # An outage, not a judgement of the prompt: it can pass once the detector works.
+            return _Enforcement(
+                status=OutcomeStatus.BLOCKED,
+                reason="detection_failed",
+                evidence=_outcome(decision, OutcomeStatus.BLOCKED, "detection_failed"),
+                response=_DETECTION_FAILED_MESSAGE,
+                retryable=True,
+            )
         if decision.action is Action.BLOCK:
             return _Enforcement(
                 status=OutcomeStatus.BLOCKED,
@@ -752,7 +827,9 @@ class ControlPlane:
             for f in counted
             if policy.category_of(f.entity_type) in document.response.redact_categories
         ]
-        return _ReplyScan(signals, counted, redact(text, to_redact))
+        return _ReplyScan(
+            signals, counted, redact(text, to_redact), _reply_rationale(signals, counted, policy)
+        )
 
     # ------------------------------------------------------------------ helpers
 
@@ -832,6 +909,23 @@ def _verdict(signals: Signals, policy: Policy) -> Verdict:
     return Verdict(policy, classification, decide(classification, policy))
 
 
+def _blocked_for_failed_detection(
+    decision: Decision, classification: Classification, policy: Policy
+) -> bool:
+    """A block that only a failed detector caused, so a retry can pass once it works.
+
+    A block by a rule that names a category, such as block-secrets, judged what was found,
+    even if another detector failed at the same time: that is a decision, not an outage.
+    """
+    if decision.action is not Action.BLOCK:
+        return False
+    if classification.label is not Label.UNKNOWN_ASSUME_PRIVATE:
+        return False
+    rule = next((r for r in policy.document.rules if r.id == decision.rule_id), None)
+    # No rule: the default action or the detection-failed guard decided.
+    return rule is None or not rule.when.any_category
+
+
 def _outcome(
     decision: Decision,
     status: OutcomeStatus,
@@ -861,6 +955,53 @@ def _private(findings: Sequence[Finding]) -> list[Finding]:
     The default policy blocks an injection before any model, so `redact` never sends one.
     """
     return [f for f in findings if f.entity_type != SEMANTIC_INJECTION]
+
+
+def _reply_rationale(signals: Signals, counted: Sequence[Finding], policy: Policy) -> str:
+    """Why the response rules changed the answer, or left it as the model wrote it.
+
+    The answer has its own rules, `response.redact_categories`, and none of the prompt's
+    rules apply to it, so an answer the scan found nothing to remove from comes back as
+    the model wrote it (before any placeholders are put back).
+    """
+    if not all(run.ok for run in signals.detectors):
+        return "A detector failed on the answer, so it could not be checked and is withheld."
+    rules = policy.document.response.redact_categories
+    removed = [f for f in counted if policy.category_of(f.entity_type) in rules]
+    if removed:
+        changed = (
+            f"The response rules remove {_listed(rules)}, so the answer was changed: "
+            f"{_named(removed, policy)} masked."
+        )
+        left = [f for f in counted if f not in removed]
+        if not left:
+            return changed
+        return f"{changed} Not masked: {_named(left, policy)}, which they do not remove."
+    if not rules:
+        found = f"The scan found {_named(counted, policy)}, but the" if counted else "The"
+        return f"{found} policy has no response rules, so the answer is unchanged."
+    if counted:
+        return (
+            f"The scan found {_named(counted, policy)}, but the response rules remove only "
+            f"{_listed(rules)}, so the answer is unchanged."
+        )
+    return (
+        "The scan found nothing in the answer, so the response rules "
+        f"(remove {_listed(rules)}) left it unchanged."
+    )
+
+
+def _named(findings: Sequence[Finding], policy: Policy) -> str:
+    """'EMAIL_ADDRESS (pii), PERSON (pii)': each type once, with its category."""
+    named = []
+    for entity_type in dict.fromkeys(f.entity_type for f in findings):
+        category = policy.category_of(entity_type)
+        named.append(f"{entity_type} ({category})" if category else entity_type)
+    return ", ".join(named)
+
+
+def _listed(items: Sequence[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def _skipped_on_output(policy: Policy) -> tuple[str, ...]:

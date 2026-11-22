@@ -483,6 +483,7 @@ interface StepProps {
 
 function Step({ record, start, shown, onToggle }: StepProps) {
   const summary = summarize(record);
+  const why = rationaleOf(record);
   const recordId = `record-${record.seq}`;
   const elapsed = new Date(record.ts).getTime() - new Date(start.ts).getTime();
   return (
@@ -503,6 +504,7 @@ function Step({ record, start, shown, onToggle }: StepProps) {
         <span className="audit-step-what">
           <span className={`summary-title ${summary.tone}`}>{summary.title}</span>{" "}
           <span className={summary.detailIsCode ? "muted mono" : "muted"}>{summary.detail}</span>
+          {why && <span className="audit-step-why">{why}</span>}
           {record.event === "detection" && <MaskedPrompt body={record.body} />}
           {record.event === "model_reply" && <MaskedReply body={record.body} />}
         </span>
@@ -521,6 +523,19 @@ function Step({ record, start, shown, onToggle }: StepProps) {
       )}
     </li>
   );
+}
+
+// Why the step did what it did, in the record's own sentence: the rule that decided the
+// prompt, or what the response rules did to the answer (written from 2026-11-22).
+function rationaleOf(record: AuditRecord): string | null {
+  const body = record.body;
+  const text =
+    record.event === "decision"
+      ? field(field(body, "decision"), "rationale")
+      : record.event === "model_reply"
+        ? field(body, "rationale")
+        : null;
+  return typeof text === "string" ? text : null;
 }
 
 // The prompt as the detection record keeps it: every private value replaced by a placeholder.
@@ -720,7 +735,7 @@ function summarize(record: AuditRecord): Summary {
     const counted = (Array.isArray(found) ? found : []).filter((f) => field(f, "counted"));
     const redacted = formatCounts(field(body, "redacted"));
     return {
-      title: redacted ? "Redacted again" : "Answer back",
+      title: redacted ? "Answer changed" : "Answer unchanged",
       detail: [
         `${Number(field(body, "reply_chars")).toLocaleString()} characters`,
         counted.length === 0

@@ -5,7 +5,7 @@ This is captured output from the control plane built from this repository, runni
 - **Sovereign model:** Ollama serving `llama3.2:3b`, inside the boundary. The same model runs the semantic detector.
 - **External model:** Anthropic's Claude API, `claude-haiku-5-5`. Each `model_reply` below is its real answer.
 - **Detectors:** the pattern rules, Presidio with `en_core_web_md`, and the semantic detector.
-- **Policy:** `default-sovereign-policy` v1.2.1, the shipped [policy/policy.yaml](../policy/policy.yaml).
+- **Policy:** `default-sovereign-policy` v1.2.1, the policy shipped on that day. The shipped [policy/policy.yaml](../policy/policy.yaml) is now v1.4.0. Since 1.3.0 it removes confidential business passages from answers, so the answer in section 4 would now come back as a placeholder. Since 1.4.0 it blocks a prompt a detector could not check, so with Ollama down the reason is `detection_failed` instead of `sovereign_model_unavailable`.
 
 Recorded on 2026-11-21.
 
