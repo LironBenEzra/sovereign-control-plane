@@ -1023,18 +1023,6 @@ footer.end { border-top: 1px solid var(--line); padding-block: 20px 40px; font-s
             <ul class="test-list"><li>The judge labels with the detectors definitions and sees only the text</li><li>Agreement scores confidential as yes or no and injection separately</li></ul>
           </div>
         </div></div>
-
-        <h3>Evaluations with the real models</h3>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th scope="col">Command</th><th scope="col">What it runs</th><th scope="col">Result</th></tr></thead>
-            <tbody>
-              <tr><td class="cmd-cell"><code>make eval-semantic</code></td><td>The local LLM detector on 48 hand-labelled prompts: confidential content, and prompt injection.</td><td>9 / 9 injections caught, 0 / 39 false injection flags, the same answer in 3 runs.</td></tr>
-              <tr><td class="cmd-cell"><code>make eval-judge</code></td><td>The same 48, plus Claude (<code>claude-opus-5-5</code>) as a judge: it labels every prompt with the detector’s own definitions, without seeing the detector’s answer. The report shows the judge against the hand labels, the detector against the judge, and each disagreement with the judge’s reason. <code>--extra</code> adds prompts with no hand label, which only the judge labels.</td><td>Not run yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="line">The judge sees only these synthetic test prompts. Real traffic never reaches it.</p>
       </section>
 
       <!-- ================= DESIGN DECISIONS ================= -->
@@ -1794,5 +1782,6 @@ footer.end { border-top: 1px solid var(--line); padding-block: 20px 40px; font-s
   font-display: swap;
 }
 </style>
+
 
 </body></html>
