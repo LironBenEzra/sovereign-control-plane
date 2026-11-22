@@ -383,16 +383,41 @@ function Traffic({ metrics }: { metrics: AlertMetrics }) {
       <h2>Traffic</h2>
       <div className="stat-tiles">
         <Stat label="Requests" value={metrics.requests} />
-        <Stat label="Sent outside" value={metrics.sent_outside} />
-        <Stat label="Answered inside" value={metrics.kept_inside} />
-        <Stat label="Blocked" value={blocked} />
-        <Stat label="Failed closed" value={metrics.fail_closed} note={`${failClosedShare}%`} />
+        <Stat label="Sent outside" value={metrics.sent_outside} tone="act-allow" />
+        <Stat label="Answered inside" value={metrics.kept_inside} tone="act-route_sovereign" />
+        <Stat label="Blocked" value={blocked} tone="act-block" />
+        <Stat
+          label="Failed closed"
+          value={metrics.fail_closed}
+          note={`${failClosedShare}%`}
+          tone="chip-warn"
+        />
       </div>
       <div className="bar-grid">
-        <BarList title="By action" data={metrics.by_action} names={actionName} />
-        <BarList title="By outcome" data={metrics.by_outcome} names={outcomeName} />
-        <BarList title="By category" data={metrics.by_category} mono />
-        <BarList title="Values redacted, by type" data={metrics.redacted_by_entity} mono />
+        <BarList
+          title="By action"
+          data={metrics.by_action}
+          names={actionName}
+          tone={(key) => `act-${key}`}
+        />
+        <BarList
+          title="By outcome"
+          data={metrics.by_outcome}
+          names={outcomeName}
+          tone={(key) => `outcome-${key}`}
+        />
+        <BarList
+          title="By category"
+          data={metrics.by_category}
+          mono
+          tone={(key) => `tone-${categoryTone(key)}`}
+        />
+        <BarList
+          title="Values redacted, by type"
+          data={metrics.redacted_by_entity}
+          mono
+          tone={() => "act-redact"}
+        />
       </div>
       <div className="stat-tiles">
         <LatencyStat label="Local model answer time" stats={metrics.latency_ms.inside} />
@@ -431,9 +456,20 @@ function Traffic({ metrics }: { metrics: AlertMetrics }) {
   );
 }
 
-function Stat({ label, value, note }: { label: string; value: string | number; note?: string }) {
+function Stat({
+  label,
+  value,
+  note,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  note?: string;
+  // A class that sets --tone: where these requests ended up.
+  tone?: string;
+}) {
   return (
-    <div className="stat">
+    <div className={tone ? `stat ${tone}` : "stat"}>
       <span className="stat-label">{label}</span>
       <span className="stat-value">
         {value}
@@ -462,11 +498,14 @@ function BarList({
   data,
   names,
   mono = false,
+  tone,
 }: {
   title: string;
   data: Record<string, number>;
   names?: (key: string) => string;
   mono?: boolean;
+  // A class that sets --tone for one bar, so a bar has the colour of what it counts.
+  tone?: (key: string) => string;
 }) {
   const entries = Object.entries(data);
   const max = Math.max(1, ...entries.map(([, value]) => value));
@@ -480,7 +519,7 @@ function BarList({
           {entries.map(([key, value]) => {
             const name = names ? names(key) : key;
             return (
-              <li key={key} title={`${name}: ${value}`}>
+              <li key={key} className={tone?.(key)} title={`${name}: ${value}`}>
                 <span className={mono ? "bar-name mono" : "bar-name"}>{name}</span>
                 <span className="bar-track" aria-hidden="true">
                   <span className="bar" style={{ width: `${(value / max) * 100}%` }} />

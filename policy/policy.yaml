@@ -7,7 +7,7 @@
 # If this file is missing or invalid, every request is blocked until it is fixed.
 
 id: default-sovereign-policy
-version: "1.2.0"
+version: "1.2.1"
 description: Keep secrets and prompt injections out of every model, keep regulated data and confidential business content in the boundary, redact contact PII.
 
 # What counts as private data: category -> entity types the detectors look for.
@@ -118,8 +118,6 @@ egress:
   # AND the destination is listed here. Remove an entry to cut that destination off.
   allowed_destinations:
     - anthropic
-    # The labelled stand-in used when no ANTHROPIC_API_KEY is set.
-    - stub-external
 
 response:
   # Categories removed from a model's answer before it is returned to the caller.

@@ -1,21 +1,31 @@
 """Key material for the audit log.
 
-Two keys, both generated on first run and kept inside the trust boundary:
+Two keys, kept inside the trust boundary:
 
 * an Ed25519 signing key. Its public half is all a reviewer needs to verify the log.
 * an HMAC key used to store private values as keyed hashes. A plain SHA-256 of a phone
   number or SSN can be brute-forced; a keyed hash cannot without this key.
 
-In production both would live in an HSM or KMS, not on the data volume.
+Run locally, both are generated on first run and kept on the data volume. A deployment
+can keep them in AWS Secrets Manager instead (see `control_plane.aws_secrets`), or keep
+the signing key in AWS KMS, where it never leaves (see `control_plane.aws_kms`). This
+module's command line hands a key on the data volume over once:
+
+    python -m control_plane.audit.keys export signing|hmac --data-dir data
+
+prints the key on the data volume, or a new one if there is none, without writing it.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import hmac
 import os
 import secrets
+import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
@@ -33,26 +43,35 @@ HMAC_KEY_FILE = "evidence_hmac.key"
 def load_or_create_signing_key(key_dir: Path) -> Ed25519PrivateKey:
     private_path = key_dir / SIGNING_KEY_FILE
     if private_path.exists():
-        key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
-        if not isinstance(key, Ed25519PrivateKey):
-            raise ValueError(f"{private_path} is not an Ed25519 private key")
+        key = signing_key_from_pem(private_path.read_bytes())
     else:
         key = Ed25519PrivateKey.generate()
-        _write_private(
-            private_path,
-            key.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
-            ),
-        )
-    # Written on every start, so the verifier always finds the key that matches.
+        _write_private(private_path, signing_key_to_pem(key))
+    write_public_key(key_dir, key.public_key())
+    return key
+
+
+def signing_key_from_pem(pem: bytes) -> Ed25519PrivateKey:
+    key = serialization.load_pem_private_key(pem, password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ValueError("the audit signing key is not an Ed25519 private key")
+    return key
+
+
+def signing_key_to_pem(key: Ed25519PrivateKey) -> bytes:
+    return key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
+
+
+def write_public_key(key_dir: Path, public_key: Ed25519PublicKey) -> None:
+    """Written on every start, so the verifier always finds the key that matches."""
+    key_dir.mkdir(parents=True, exist_ok=True)
     (key_dir / PUBLIC_KEY_FILE).write_bytes(
-        key.public_key().public_bytes(
+        public_key.public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         )
     )
-    return key
 
 
 def load_public_key(path: Path) -> Ed25519PublicKey:
@@ -92,8 +111,41 @@ def keyed_hash(key: bytes, value: str) -> str:
     return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def export_key(kind: str, key_dir: Path) -> str:
+    """The key on the data volume as text, or a new one if there is none. Writes nothing.
+
+    The signing key as PEM, the HMAC key as base64: the forms Secrets Manager stores.
+    """
+    if kind == "signing":
+        path = key_dir / SIGNING_KEY_FILE
+        key = (
+            signing_key_from_pem(path.read_bytes())
+            if path.exists()
+            else Ed25519PrivateKey.generate()
+        )
+        return signing_key_to_pem(key).decode("ascii")
+    path = key_dir / HMAC_KEY_FILE
+    raw = path.read_bytes() if path.exists() else secrets.token_bytes(32)
+    return base64.b64encode(raw).decode("ascii")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Hand an audit key over to a secret store.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    export = commands.add_parser("export", help="print a key, or a new one if there is none")
+    export.add_argument("kind", choices=["signing", "hmac"])
+    export.add_argument("--data-dir", type=Path, default=Path("data"))
+    args = parser.parse_args(argv)
+    sys.stdout.write(export_key(args.kind, args.data_dir / "keys"))
+    return 0
+
+
 def _write_private(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

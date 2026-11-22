@@ -49,6 +49,28 @@ def test_overlapping_findings_are_merged_so_nothing_stays_in_the_clear() -> None
     assert result.placeholders == {"<EMAIL_ADDRESS_1>": text}
 
 
+def test_a_span_of_the_masked_text_maps_back_to_the_original() -> None:
+    text = "Mail a@x.io or call Dana today."
+    result = redact(
+        text, [finding(text, "a@x.io", "EMAIL_ADDRESS"), finding(text, "Dana", "PERSON")]
+    )
+    masked = result.text  # "Mail <EMAIL_ADDRESS_1> or call <PERSON_1> today."
+
+    def original(masked_part: str) -> str:
+        start = masked.index(masked_part)
+        mapped_start, mapped_end = result.original_span(start, start + len(masked_part))
+        return text[mapped_start:mapped_end]
+
+    assert original(masked) == text
+    assert original("Mail") == "Mail"
+    assert original(" or call ") == " or call "
+    assert original(" today.") == " today."
+    assert original("<PERSON_1>") == "Dana"
+    # A span that starts or ends inside a placeholder covers the whole value.
+    assert original("ADDRESS_1> or") == "a@x.io or"
+    assert original("call <PERS") == "call Dana"
+
+
 def test_redact_without_findings_returns_the_text_unchanged() -> None:
     result = redact("nothing here", [])
 

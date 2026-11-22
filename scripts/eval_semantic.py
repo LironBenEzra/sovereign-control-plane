@@ -8,6 +8,12 @@ Two things are scored separately: whether confidential content is caught, and wh
 prompt injection is caught. For confidential content any category counts, because every
 category gets the same policy action; the exact category is shown but not scored. None of
 these texts appear in the detector's few-shot examples.
+
+With --judge, Claude also labels every prompt with the detector's own definitions, without
+seeing the detector's answer (control_plane.evaluation.judge). The report then shows how
+often the judge agrees with the hand labels, how often the detector agrees with the judge,
+and each disagreement with the judge's reason. --extra adds prompts with no hand label,
+which only the judge labels. Only these synthetic prompts are sent to Claude.
 """
 
 from __future__ import annotations
@@ -16,20 +22,29 @@ import argparse
 import os
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 from control_plane.detection.semantic import (
     CATEGORIES,
     ENTITY_TYPES,
     INTERNAL_CONFIDENTIAL,
     INTERNAL_MEETING,
+    NONE,
     NONPUBLIC_FINANCIAL,
     PROMPT_INJECTION,
     UNRELEASED_PRODUCT,
     SemanticDetector,
 )
-
-NONE = "none"
+from control_plane.evaluation.judge import (
+    JUDGE_MODEL,
+    JudgeUnavailableError,
+    Labels,
+    SemanticJudge,
+    Verdict,
+    agreement,
+)
 
 CASES: tuple[tuple[str, str, bool], ...] = (
     # Confidential: should be caught. One of them is also an injection aimed at the detector.
@@ -246,7 +261,25 @@ def main() -> None:
     parser.add_argument(
         "--ollama-url", default=os.environ.get("SCP_OLLAMA_URL", "http://localhost:11434")
     )
+    parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="also have Claude label every prompt (needs ANTHROPIC_API_KEY; sends only "
+        "these synthetic test prompts)",
+    )
+    parser.add_argument("--judge-model", default=JUDGE_MODEL)
+    parser.add_argument(
+        "--extra",
+        type=Path,
+        help="a file of more prompts, one per line, with no hand label: the judge labels them",
+    )
     args = parser.parse_args()
+    extra = _read_extra(args.extra) if args.extra else []
+    if extra and not args.judge:
+        parser.error("--extra needs --judge: only the judge can label them")
+
+    texts = [text for text, _, _ in CASES] + extra
+    verdicts = _judge_all(texts, args.judge_model) if args.judge else {}
 
     detector = SemanticDetector(args.ollama_url, args.model, timeout_s=120)
     detector.detect("Warm-up.", ENTITY_TYPES)  # load the model before timing
@@ -254,18 +287,23 @@ def main() -> None:
     confidential = Score()
     injection = Score()
     latencies: list[float] = []
-    for text, expected_category, expected_injection in CASES:
+    detected: dict[str, Labels] = {}
+    for text in texts:
         started = time.monotonic()
         found = {f.entity_type for f in detector.detect(text, ENTITY_TYPES)}
         latencies.append(time.monotonic() - started)
-        got_category = next((c for c in CATEGORIES if c in found), NONE)
-        got_injection = PROMPT_INJECTION in found
-        ok_category = confidential.add(expected_category != NONE, got_category != NONE)
-        ok_injection = injection.add(expected_injection, got_injection)
+        detected[text] = Labels(
+            next((c for c in CATEGORIES if c in found), NONE), PROMPT_INJECTION in found
+        )
+
+    for text, expected_category, expected_injection in CASES:
+        got = detected[text]
+        ok_category = confidential.add(expected_category != NONE, got.confidential)
+        ok_injection = injection.add(expected_injection, got.injection)
         mark = "ok  " if ok_category and ok_injection else "MISS"
         print(
-            f"{mark} category {expected_category:<21} got {got_category:<21} "
-            f"injection {expected_injection!s:<5} got {got_injection!s:<5} {text[:50]}"
+            f"{mark} category {expected_category:<21} got {got.category:<21} "
+            f"injection {expected_injection!s:<5} got {got.injection!s:<5} {text[:50]}"
         )
 
     print(f"\nmodel {args.model}, prompt {detector.version}, {len(CASES)} prompts")
@@ -277,6 +315,70 @@ def main() -> None:
         f"latency per call:      median {statistics.median(latencies):.2f}s, "
         f"max {max(latencies):.2f}s"
     )
+    if args.judge:
+        _report_judge(verdicts, detected, extra)
+
+
+def _read_extra(path: Path) -> list[str]:
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _judge_all(texts: list[str], model: str) -> dict[str, Verdict | None]:
+    """Claude's labels, by text. None where the judge gave no label."""
+    import anthropic  # noqa: PLC0415 - only the judge needs the SDK
+
+    judge = SemanticJudge(anthropic.Anthropic(), model)
+
+    def label(text: str) -> Verdict | None:
+        try:
+            return judge.judge(text)
+        except JudgeUnavailableError as exc:
+            print(f"judge gave no label ({exc}): {text[:60]}")
+            return None
+
+    # The judge runs before the detector, in parallel, so it does not skew detector timing.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return dict(zip(texts, pool.map(label, texts), strict=True))
+
+
+def _report_judge(
+    verdicts: dict[str, Verdict | None], detected: dict[str, Labels], extra: list[str]
+) -> None:
+    labelled = [(text, Labels(category, inj)) for text, category, inj in CASES]
+    judged = {text: Labels(v.category, v.injection) for text, v in verdicts.items() if v}
+    models = sorted({v.model for v in verdicts.values() if v})
+
+    against_hand = agreement((hand, judged[text]) for text, hand in labelled if text in judged)
+    against_detector = agreement((judged[text], detected[text]) for text in judged)
+    print(f"\njudge {', '.join(models)}, {len(judged)} of {len(verdicts)} prompts labelled")
+    print("judge agrees with the hand labels")
+    print(f"  confidential:        {against_hand.confidential}/{against_hand.total}")
+    print(f"  injection:           {against_hand.injection}/{against_hand.total}")
+    print(f"detector agrees with the judge ({len(extra)} of them labelled by the judge only)")
+    print(f"  confidential:        {against_detector.confidential}/{against_detector.total}")
+    print(f"  injection:           {against_detector.injection}/{against_detector.total}")
+
+    hand = dict(labelled)
+    disagreements = [
+        text
+        for text in judged
+        if judged[text].confidential != detected[text].confidential
+        or judged[text].injection != detected[text].injection
+        or (text in hand and judged[text].confidential != hand[text].confidential)
+        or (text in hand and judged[text].injection != hand[text].injection)
+    ]
+    if disagreements:
+        print("\nfor a person to decide (hand / judge / detector, as confidential+injection):")
+    for text in disagreements:
+        verdict = verdicts[text]
+        assert verdict is not None
+        marks = [_marks(hand[text]) if text in hand else "--", _marks(judged[text])]
+        print(f"  {' / '.join([*marks, _marks(detected[text])])}  {text[:70]}")
+        print(f"      judge: {verdict.reason}")
+
+
+def _marks(labels: Labels) -> str:
+    return f"{'C' if labels.confidential else '-'}{'I' if labels.injection else '-'}"
 
 
 @dataclass

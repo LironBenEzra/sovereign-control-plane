@@ -20,6 +20,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# AWS Secrets Manager (SCP_AWS_SECRETS_PREFIX) and KMS signing (SCP_AUDIT_KMS_KEY_ID), as the
+# hosted demo uses them.
+aws = [
+    "boto3>=1.35",
+]
 dev = [
     "ruff>=0.6",
     "pyright>=1.1.380",

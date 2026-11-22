@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { InferenceReply } from "../api";
 import {
   ACTION_LABELS,
@@ -63,10 +64,6 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
             <dd>
               {policy.id} <span className="muted">v{policy.version}</span>
             </dd>
-            <dt>Policy SHA-256</dt>
-            <dd className="mono" title={policy.sha256}>
-              {shortHash(policy.sha256, 16)}
-            </dd>
           </dl>
         ) : (
           <p className="hint">No policy was consulted for this decision.</p>
@@ -79,7 +76,7 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
             Reason: <code>{result.outcome_reason}</code>
           </p>
         )}
-        <Boundary result={result} />
+        <Boundary result={result} inspected={inspected} />
       </Step>
 
       <Step number={4} title="Audit" subtitle="Signed receipts">
@@ -115,61 +112,214 @@ export function DecisionPanel({ reply, prompt, onShowEvidence }: Props) {
   );
 }
 
+type Side = "inside" | "outside";
+
+interface FlowStep {
+  side: Side;
+  title: string;
+  body: React.ReactNode;
+}
+
 /**
- * Where the prompt went, drawn on either side of the trust boundary. The left side never
- * leaves the boundary; the right side is exactly what crossed it, if anything did.
+ * What happened to the prompt, step by step, drawn on either side of the trust boundary:
+ * each step sits on the side where it happened, so the order shows the prompt crossing
+ * the line and coming back. The left side never leaves the boundary; the right side is
+ * exactly what crossed it, if anything did.
  */
-function Boundary({ result }: { result: InferenceResult }) {
-  const { model } = result;
-  const external = model !== null && !model.in_boundary;
-  const restored = result.model_reply !== null && result.model_reply !== result.response;
-  const sentOutside = external && result.forwarded_prompt !== null;
+function Boundary({ result, inspected }: { result: InferenceResult; inspected: string }) {
+  const steps = flowSteps(result, inspected);
+  const crossed = steps.some((step) => step.side === "outside");
   return (
     <div className="boundary">
-      <section className="boundary-side boundary-inside" aria-label="Inside your boundary">
-        <h4>Inside your boundary</h4>
-        {model === null && <p className="hint">No model was called.</p>}
-        {model?.in_boundary && result.forwarded_prompt !== null && (
-          <Passage label={`Sent to ${model.provider}, ${model.model}`}>
-            {result.forwarded_prompt}
-          </Passage>
-        )}
-        {result.response !== null && (
-          <Passage
-            label={restored ? "Returned to you, with the original values put back" : "Returned to you"}
-            prose
-          >
-            {result.response}
-          </Passage>
-        )}
-      </section>
-      <section className="boundary-side boundary-outside" aria-label="Outside">
-        <h4>Outside</h4>
-        {sentOutside && model ? (
-          <>
-            <Passage label={`Sent to ${model.provider}${model.stub ? ", a stub" : ""}`}>
-              {result.forwarded_prompt}
-            </Passage>
-            {result.model_reply !== null ? (
-              <Passage label="The reply that came back">{result.model_reply}</Passage>
-            ) : (
-              <p className="hint">No answer came back.</p>
-            )}
-          </>
-        ) : (
-          <p className="nothing-crossed">Nothing crossed the boundary.</p>
-        )}
-      </section>
+      <h4 className="boundary-head boundary-inside">Inside your boundary</h4>
+      <h4 className="boundary-head boundary-outside">Outside</h4>
+      {steps.map((step, index) => {
+        const number = `3.${index + 1}`;
+        const last = index === steps.length - 1 ? " boundary-last" : "";
+        const card = <FlowCard number={number} step={step} />;
+        return (
+          <Fragment key={number}>
+            <div className={`boundary-cell boundary-inside${last}`}>
+              {step.side === "inside" && card}
+            </div>
+            <div className={`boundary-cell boundary-outside${last}`}>
+              {step.side === "outside" && card}
+              {!crossed && index === 0 && (
+                <p className="nothing-crossed">Nothing crossed the boundary.</p>
+              )}
+            </div>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
 
-function Passage(props: { label: string; prose?: boolean; children: React.ReactNode }) {
+function flowSteps(result: InferenceResult, inspected: string): FlowStep[] {
+  const { model, forwarded_prompt: sent, model_reply: reply, response } = result;
+  if (model === null || sent === null) {
+    return [{ side: "inside", title: "No model was called", body: null }];
+  }
+
+  const steps: FlowStep[] = [];
+  const side: Side = model.in_boundary ? "inside" : "outside";
+  const masked = side === "outside" ? swaps(sent, inspected) : null;
+  if (masked && masked.some((part) => part.placeholder)) {
+    steps.push({
+      side: "inside",
+      title: "Private values replaced with placeholders",
+      body: <SwapTable parts={masked} />,
+    });
+  }
+
+  const target = model.stub ? `${model.provider}, a stub` : `${model.provider}, ${model.model}`;
+  steps.push({ side, title: `Sent to ${target}`, body: <Placeholders text={sent} /> });
+
+  if (side === "outside") {
+    steps.push(
+      reply === null
+        ? { side, title: "No answer came back", body: null }
+        : { side, title: "The reply that came back", body: <Placeholders text={reply} /> },
+    );
+  }
+
+  if (response !== null) {
+    const restored = reply !== null && reply !== response ? swaps(reply, response) : null;
+    const putBack = restored?.some((part) => part.placeholder) ?? false;
+    steps.push({
+      side: "inside",
+      title: putBack ? "Original values put back, then returned to you" : "Returned to you",
+      body: (
+        <pre className="block block-response">
+          {putBack && restored ? <Restored parts={restored} /> : response}
+        </pre>
+      ),
+    });
+  }
+  return steps;
+}
+
+function FlowCard({ number, step }: { number: string; step: FlowStep }) {
   return (
-    <div className="passage">
-      <div className="field-label">{props.label}</div>
-      <pre className={props.prose ? "block block-response" : "block"}>{props.children}</pre>
-    </div>
+    <section className="flow-step" aria-label={`${number} ${step.title}`}>
+      <div className="flow-head">
+        <span className="flow-number">{number}</span>
+        <span className="flow-title">{step.title}</span>
+      </div>
+      <span className="flow-side">
+        {step.side === "inside" ? "Inside your boundary" : "Outside"}
+      </span>
+      {step.body}
+    </section>
+  );
+}
+
+// The server names placeholders <ENTITY_TYPE_n>, as enforcement.redact() writes them.
+const PLACEHOLDER = /(<[A-Z][A-Z0-9_]*_\d+>)/;
+
+interface SwapPart {
+  text: string;
+  placeholder?: string;
+}
+
+/**
+ * Lines up a text that has placeholders with the same text that has the values, and
+ * returns the second one split into plain parts and swapped values. Only the server knows
+ * the mapping, so this reads it back from the two texts; if they do not line up exactly
+ * (two placeholders side by side, or one placeholder with two values), it returns null and
+ * the plain text is shown instead.
+ */
+function swaps(withPlaceholders: string, withValues: string): SwapPart[] | null {
+  const pieces = withPlaceholders.split(PLACEHOLDER);
+  const parts: SwapPart[] = [];
+  const seen = new Map<string, string>();
+  let cursor = 0;
+  for (let i = 0; i < pieces.length; i += 1) {
+    const piece = pieces[i] ?? "";
+    if (i % 2 === 0) {
+      if (!withValues.startsWith(piece, cursor)) return null;
+      if (piece) parts.push({ text: piece });
+      cursor += piece.length;
+      continue;
+    }
+    const next = pieces[i + 1] ?? "";
+    let end: number;
+    if (i + 2 >= pieces.length) {
+      end = next ? withValues.length - next.length : withValues.length;
+    } else if (!next) {
+      return null;
+    } else {
+      end = withValues.indexOf(next, cursor);
+    }
+    if (end < cursor) return null;
+    const value = withValues.slice(cursor, end);
+    if (!value || (seen.has(piece) && seen.get(piece) !== value)) return null;
+    seen.set(piece, value);
+    // A placeholder that came back unchanged (an output-scan one) was not swapped.
+    parts.push(value === piece ? { text: value } : { text: value, placeholder: piece });
+    cursor = end;
+  }
+  return cursor === withValues.length ? parts : null;
+}
+
+function SwapTable({ parts }: { parts: SwapPart[] }) {
+  const rows = new Map<string, string>();
+  for (const part of parts) if (part.placeholder) rows.set(part.placeholder, part.text);
+  return (
+    <>
+      <table className="flow-swaps">
+        <thead>
+          <tr>
+            <th>Your value</th>
+            <th>Sent as</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...rows].map(([placeholder, value]) => (
+            <tr key={placeholder}>
+              <td>{value}</td>
+              <td>
+                <mark className="flow-mark flow-out">{placeholder}</mark>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="hint">The values stay here. Only the placeholders are sent.</p>
+    </>
+  );
+}
+
+function Placeholders({ text }: { text: string }) {
+  return (
+    <pre className="block">
+      {text.split(PLACEHOLDER).map((piece, index) =>
+        index % 2 === 1 ? (
+          <mark key={index} className="flow-mark flow-out">
+            {piece}
+          </mark>
+        ) : (
+          piece
+        ),
+      )}
+    </pre>
+  );
+}
+
+function Restored({ parts }: { parts: SwapPart[] }) {
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.placeholder ? (
+          <mark key={index} className="flow-mark flow-in" title={`Was ${part.placeholder}`}>
+            {part.text}
+            <span className="mark-tag">{part.placeholder.slice(1, -1)}</span>
+          </mark>
+        ) : (
+          part.text
+        ),
+      )}
+    </>
   );
 }
 

@@ -8,7 +8,7 @@ from control_plane.detection.presidio import ModelNotInstalledError, PresidioDet
 from control_plane.detection.rules import RuleDetector
 from control_plane.models import DetectorRun, Finding, Label, Signals
 from control_plane.policy import Policy
-from tests.conftest import AWS_KEY, EMAIL, KeywordDetector
+from tests.conftest import AWS_KEY, EMAIL, PERSON, WEAK_PHONE, KeywordDetector
 
 OK = (DetectorRun("fake", "test", ok=True),)
 
@@ -128,6 +128,48 @@ def test_a_detector_returning_a_span_outside_the_text_is_marked_failed() -> None
 
     assert signals.findings == ()
     assert signals.detectors[0].error == "InvalidSpanError"
+
+
+def test_a_masked_text_detector_reads_the_text_with_the_values_masked() -> None:
+    text = f"Ask {PERSON} at {EMAIL} or {WEAK_PHONE} about the launch."
+    reader = KeywordDetector({"launch": ("UNRELEASED_PRODUCT", 0.7)}, name="semantic")
+    runner = DetectorRunner([KeywordDetector()], 5.0, masked_text_detectors=[reader])
+
+    signals = runner.run(
+        text, ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "UNRELEASED_PRODUCT"], mask_min_score=0.5
+    )
+
+    # The phone number scores 0.4, below the masking score: a redaction would keep it too.
+    assert reader.calls == [
+        f"Ask <PERSON_1> at <EMAIL_ADDRESS_1> or {WEAK_PHONE} about the launch."
+    ]
+    (found,) = (f for f in signals.findings if f.detector == "semantic")
+    assert text[found.start : found.end] == "launch"
+
+
+@pytest.mark.parametrize(
+    ("broken", "error"),
+    [
+        (KeywordDetector(name="presidio", error=RuntimeError()), "RuntimeError"),
+        (KeywordDetector(name="presidio", delay_s=0.5), "TimeoutError"),
+    ],
+)
+def test_no_model_reads_the_text_when_a_value_detector_failed(
+    broken: KeywordDetector, error: str
+) -> None:
+    # The failed detector may have missed a value, so the masked text cannot be trusted.
+    reader = KeywordDetector({}, name="semantic")
+    runner = DetectorRunner([RuleDetector(), broken], 0.2, masked_text_detectors=[reader])
+
+    signals = runner.run(f"key {AWS_KEY} for {PERSON}", ["AWS_ACCESS_KEY", "PERSON"])
+
+    assert reader.calls == []
+    # Not recorded, as a skipped detector is not: it did not fail, it did not run.
+    assert [(run.name, run.error) for run in signals.detectors] == [
+        ("rules", None),
+        ("presidio", error),
+    ]
+    assert runner.failing() == {"presidio": error}
 
 
 # ---------------------------------------------------------------- classification

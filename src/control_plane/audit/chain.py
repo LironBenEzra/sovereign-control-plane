@@ -16,6 +16,8 @@ EVENT_DETECTION = "detection"
 EVENT_DECISION = "decision"
 # Written just before a model is called, so a crash during the call still shows it.
 EVENT_MODEL_CALL = "model_call"
+# Written when the model's answer is back and scanned, before anything is returned.
+EVENT_MODEL_REPLY = "model_reply"
 EVENT_OUTCOME = "outcome"
 # The request failed on an unexpected exception. Takes the place of the outcome.
 EVENT_ERROR = "error"

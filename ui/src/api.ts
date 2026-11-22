@@ -132,9 +132,9 @@ export const restoreDefaultPolicy = (baseSha256: string | null, note: string, to
     token,
   );
 
-/** What the draft and the policy in force decide for one prompt. Calls no model. */
-export const previewPolicy = (document: PolicyDocument, prompt: string, token: string) =>
-  sendJson<PolicyPreview>("POST", "/v1/policy/preview", { document, prompt }, token);
+/** What the draft and the policy in force decide for one prompt. Calls no model. Needs no token. */
+export const previewPolicy = (document: PolicyDocument, prompt: string) =>
+  sendJson<PolicyPreview>("POST", "/v1/policy/preview", { document, prompt });
 export const verifyAudit = () => getJson<VerifyReport>("/v1/audit/verify");
 export const getAlerts = (hours = 24) => getJson<AlertsReport>(`/v1/alerts?hours=${hours}`);
 

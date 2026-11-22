@@ -4,7 +4,10 @@
 #
 # Caddy is the only service with a published port. It serves HTTPS with a certificate it
 # obtains and renews itself, and passes requests to the control plane on the Compose
-# network. The external model stays the labelled stub: no API key is put on the server.
+# network. No secret is on the server: the audit log is signed in AWS KMS, and the control
+# plane reads every other secret from AWS Secrets Manager at startup (see deploy/ec2.sh).
+# The external model is Claude Haiku 5.5, with its Anthropic key stored there as
+# scp-demo/anthropic-api-key.
 
 services:
   control-plane:
@@ -15,6 +18,13 @@ services:
       # prompt and much longer for a long one. With 30 s, a 3,500-character prompt was
       # judged and a 4,200-character one was treated as private.
       SCP_DETECTION_TIMEOUT_S: "30"
+      # Used with the instance's role, which can read these secrets, sign with this key,
+      # and nothing else.
+      SCP_AWS_SECRETS_PREFIX: scp-demo/
+      SCP_AUDIT_KMS_KEY_ID: alias/scp-demo-audit
+      # A demo setting: anyone may change the policy, and each change is signed as "visitor".
+      SCP_OPEN_POLICY_EDITING: "true"
+      AWS_DEFAULT_REGION: ${AWS_REGION:?set AWS_REGION to the instance's region}
     restart: unless-stopped
 
   ollama:

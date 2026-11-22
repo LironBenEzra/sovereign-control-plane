@@ -3,7 +3,7 @@
 One JSON object per line. Each record names the hash of the record before it, so
 changing, inserting, deleting or reordering any record breaks every hash after it.
 Each hash is signed, so someone who can write the file but does not hold the key
-cannot repair the chain.
+cannot repair the chain. The key is a `Signer`: a key in memory, or one in AWS KMS.
 
 Single writer by design: one process owns the file and serialises appends with a lock.
 Running several instances would need a shared sequencer (a database or a log service).
@@ -19,10 +19,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from control_plane.audit.chain import GENESIS_HASH, AuditRecord, canonical_json, record_digest
-from control_plane.audit.keys import key_id, sign_digest
+from control_plane.audit.keys import key_id, signature_is_valid
+from control_plane.audit.signing import Signer
 from control_plane.audit.verify import parse_lines, verify_chain
 
 
@@ -42,12 +41,13 @@ class AuditLog:
     def __init__(
         self,
         path: Path,
-        signing_key: Ed25519PrivateKey,
+        signer: Signer,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._path = path
-        self._key = signing_key
-        self._key_id = key_id(signing_key.public_key())
+        self._signer = signer
+        self._public_key = signer.public_key
+        self._key_id = key_id(self._public_key)
         self._clock = clock
         self._lock = threading.Lock()
         self._next_seq, self._head_hash = self._resume()
@@ -59,7 +59,7 @@ class AuditLog:
             return 0, GENESIS_HASH
 
         records, problems = parse_lines(self._path.read_text(encoding="utf-8").splitlines())
-        report = verify_chain(records, self._key.public_key())
+        report = verify_chain(records, self._public_key)
         problems = [*report.chain_problems, *problems]
         if problems:
             first = problems[0]
@@ -84,6 +84,16 @@ class AuditLog:
                     "prev_hash": self._head_hash,
                 }
             )
+            try:
+                signature = self._signer.sign(digest)
+            except Exception as exc:
+                # Deliberately broad: a remote signer can fail in many ways, and every one
+                # of them means this record cannot be written.
+                raise AuditWriteError(f"signing failed: {type(exc).__name__}: {exc}") from exc
+            if not signature_is_valid(self._public_key, digest, signature):
+                # A record that does not verify would break the chain for good, and the log
+                # could not be reopened. Refuse it instead.
+                raise AuditWriteError("the signer returned a signature that does not verify")
             record: AuditRecord = {
                 "seq": seq,
                 "ts": ts,
@@ -92,7 +102,7 @@ class AuditLog:
                 "body": content,
                 "prev_hash": self._head_hash,
                 "hash": digest,
-                "sig": sign_digest(self._key, digest),
+                "sig": signature,
                 "key_id": self._key_id,
             }
             try:

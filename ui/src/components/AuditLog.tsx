@@ -15,6 +15,7 @@ const EVENT_NAMES: Record<string, string> = {
   detection: "Detection",
   decision: "Decision",
   model_call: "Model call",
+  model_reply: "Model reply",
   outcome: "Outcome",
   error: "Error",
   policy_loaded: "Policy",
@@ -503,6 +504,7 @@ function Step({ record, start, shown, onToggle }: StepProps) {
           <span className={`summary-title ${summary.tone}`}>{summary.title}</span>{" "}
           <span className={summary.detailIsCode ? "muted mono" : "muted"}>{summary.detail}</span>
           {record.event === "detection" && <MaskedPrompt body={record.body} />}
+          {record.event === "model_reply" && <MaskedReply body={record.body} />}
         </span>
         <span className="audit-step-seq mono">#{record.seq}</span>
       </button>
@@ -511,7 +513,8 @@ function Step({ record, start, shown, onToggle }: StepProps) {
           <p className="hint">
             <code>hash</code> is the SHA-256 of this record's content plus <code>prev_hash</code>,
             and <code>sig</code> is the signature over that hash. No private value is stored: the
-            prompt is kept as a keyed hash, and masked in the detection record.
+            prompt is kept as a keyed hash and masked in the detection record, and an answer from
+            outside is kept masked in the model reply record.
           </p>
           <pre className="block json">{JSON.stringify(record, null, 2)}</pre>
         </div>
@@ -523,14 +526,45 @@ function Step({ record, start, shown, onToggle }: StepProps) {
 // The prompt as the detection record keeps it: every private value replaced by a placeholder.
 function MaskedPrompt({ body }: { body: Record<string, unknown> }) {
   if (!("masked_prompt" in body)) return null; // written before the field existed
-  const masked = body.masked_prompt;
-  return typeof masked === "string" ? (
-    <span className="audit-step-prompt">{masked}</span>
-  ) : (
-    <span className="audit-step-prompt audit-step-prompt-none">
-      Prompt not kept: a detector failed, so it could not be masked.
-    </span>
+  return (
+    <KeptText
+      text={body.masked_prompt}
+      none="Prompt not kept: a detector failed, so it could not be masked."
+    />
   );
+}
+
+// The answer as the model reply record keeps it, masked the same way.
+function MaskedReply({ body }: { body: Record<string, unknown> }) {
+  return (
+    <KeptText
+      text={body.masked_reply}
+      none={
+        failedRuns(body).length > 0
+          ? "Answer not kept: a detector failed on it, so it could not be masked."
+          : "Answer not kept: it came from the sovereign model, inside the boundary."
+      }
+    />
+  );
+}
+
+function KeptText({ text, none }: { text: unknown; none: string }) {
+  return typeof text === "string" ? (
+    <span className="audit-step-prompt">{text}</span>
+  ) : (
+    <span className="audit-step-prompt audit-step-prompt-none">{none}</span>
+  );
+}
+
+function failedRuns(body: Record<string, unknown>): unknown[] {
+  const runs = field(body, "detectors");
+  return (Array.isArray(runs) ? runs : []).filter((run) => !field(run, "ok"));
+}
+
+function describeFailures(failed: unknown[]): string {
+  return failed
+    .map((run) => `${String(field(run, "name"))}: ${String(field(run, "error"))}`)
+    .join(", ");
 }
 
 function VerifyBanner({ report }: { report: VerifyReport }) {
@@ -594,6 +628,12 @@ function formatDuration(ms: number): string {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
+function countBy(keys: string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const key of keys) counts[key] = (counts[key] ?? 0) + 1;
+  return counts;
+}
+
 // "EMAIL_ADDRESS ×2, PERSON" from {"EMAIL_ADDRESS": 2, "PERSON": 1}.
 function formatCounts(counts: unknown): string {
   if (typeof counts !== "object" || counts === null) return "";
@@ -626,16 +666,15 @@ function summarize(record: AuditRecord): Summary {
     };
   }
   if (record.event === "detection") {
-    const runs = field(body, "detectors");
-    const failed = (Array.isArray(runs) ? runs : []).filter((run) => !field(run, "ok"));
-    const findings = Number(field(body, "findings"));
+    const failed = failedRuns(body);
+    const found = field(body, "findings");
+    // A list of findings; records written before 2026-11-21 kept only the count.
+    const findings = Array.isArray(found) ? found.length : Number(found);
     const took = formatDuration(Number(field(body, "duration_ms")));
     if (failed.length > 0) {
       return {
         title: failed.length === 1 ? "Detector failed" : `${failed.length} detectors failed`,
-        detail: failed
-          .map((run) => `${String(field(run, "name"))}: ${String(field(run, "error"))}`)
-          .join(", "),
+        detail: describeFailures(failed),
         tone: "summary-bad",
         detailIsCode: false,
       };
@@ -664,6 +703,34 @@ function summarize(record: AuditRecord): Summary {
         .join(", "),
       // Inside and outside keep their colours from the rest of the interface.
       tone: inside ? "action-route_sovereign" : "action-allow",
+      detailIsCode: false,
+    };
+  }
+  if (record.event === "model_reply") {
+    const failed = failedRuns(body);
+    if (failed.length > 0) {
+      return {
+        title: "Scan failed",
+        detail: describeFailures(failed),
+        tone: "summary-bad",
+        detailIsCode: false,
+      };
+    }
+    const found = field(body, "findings");
+    const counted = (Array.isArray(found) ? found : []).filter((f) => field(f, "counted"));
+    const redacted = formatCounts(field(body, "redacted"));
+    return {
+      title: redacted ? "Redacted again" : "Answer back",
+      detail: [
+        `${Number(field(body, "reply_chars")).toLocaleString()} characters`,
+        counted.length === 0
+          ? "nothing found"
+          : `found ${formatCounts(countBy(counted.map((f) => String(field(f, "entity_type")))))}`,
+        redacted ? `${redacted} redacted` : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      tone: "",
       detailIsCode: false,
     };
   }
@@ -700,9 +767,16 @@ function summarize(record: AuditRecord): Summary {
     const status = String(field(body, "status"));
     const reason = field(body, "reason");
     const provider = field(field(body, "model"), "provider");
+    // Written from 2026-11-22: the placeholders whose values were put back in the answer.
+    const restored = field(field(body, "redaction"), "restored");
+    const putBack = Array.isArray(restored) && restored.length > 0 ? restored.join(", ") : "";
     return {
       title: labelFor(OUTCOME_TEXT, status),
-      detail: reason ? String(reason) : provider ? `by ${String(provider)}` : "",
+      detail: reason
+        ? String(reason)
+        : [provider ? `by ${String(provider)}` : "", putBack ? `put back ${putBack}` : ""]
+            .filter(Boolean)
+            .join(", "),
       tone: status === "completed" ? "" : "summary-bad",
       detailIsCode: Boolean(reason),
     };

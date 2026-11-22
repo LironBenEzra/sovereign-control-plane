@@ -11,8 +11,9 @@ It needs only the log, the public key and the policy snapshots. It checks that
 3. each request's records come in order: it starts with `received`, has at most one
    decision, and ends with exactly one `outcome` or `error`. A request with no end is an
    interrupted request. Logs written before `received` existed start with the decision;
-4. re-running classification and policy on the recorded signals gives the recorded
-   decision. This is what "reconstruct the decision from the evidence alone" means here.
+4. re-running classification and policy on the signals in the request's detection record
+   gives the recorded decision. This is what "reconstruct the decision from the evidence
+   alone" means here.
 """
 
 from __future__ import annotations
@@ -34,15 +35,21 @@ from control_plane.audit.chain import (
     EVENT_DETECTION,
     EVENT_ERROR,
     EVENT_MODEL_CALL,
+    EVENT_MODEL_REPLY,
     EVENT_OUTCOME,
     EVENT_RECEIVED,
     GENESIS_HASH,
     HASHED_FIELDS,
     record_digest,
 )
-from control_plane.audit.keys import PUBLIC_KEY_FILE, load_public_key, signature_is_valid
+from control_plane.audit.keys import (
+    PUBLIC_KEY_FILE,
+    key_id,
+    load_public_key,
+    signature_is_valid,
+)
 from control_plane.classification import classify
-from control_plane.evidence import signals_from_evidence
+from control_plane.evidence import recorded_signals, signals_from_evidence
 from control_plane.policy import PolicyError, decide, parse_policy
 
 _REQUIRED_FIELDS = (*HASHED_FIELDS, "hash", "sig", "key_id")
@@ -119,7 +126,7 @@ def _request_problem(
             return "second decision for one audit_id"
         else:
             request.decided = True
-    elif event in (EVENT_DETECTION, EVENT_MODEL_CALL, EVENT_ERROR):
+    elif event in (EVENT_DETECTION, EVENT_MODEL_CALL, EVENT_MODEL_REPLY, EVENT_ERROR):
         if request is None:
             return f"{event} without a received record"
         if event == EVENT_ERROR:
@@ -140,6 +147,7 @@ def verify_chain(records: Sequence[dict[str, Any]], public_key: Ed25519PublicKey
     report = Report()
     prev_hash = GENESIS_HASH
     open_requests: dict[str, _OpenRequest] = {}
+    trusted_key_id = key_id(public_key)
 
     for expected_seq, record in enumerate(records):
         seq = record["seq"]
@@ -155,7 +163,12 @@ def verify_chain(records: Sequence[dict[str, Any]], public_key: Ed25519PublicKey
             report.chain_problems.append(Problem(seq, "content does not match its hash"))
             break
         if not signature_is_valid(public_key, record["hash"], record["sig"]):
-            report.chain_problems.append(Problem(seq, "signature is not valid"))
+            # `key_id` is not covered by the hash, so it only explains a failure; the
+            # signature check above is what decides.
+            reason = "signature is not valid"
+            if record["key_id"] != trusted_key_id:
+                reason = f"signed by key {record['key_id']}, not by {trusted_key_id}"
+            report.chain_problems.append(Problem(seq, reason))
             break
 
         if problem := _request_problem(record["event"], record["audit_id"], seq, open_requests):
@@ -172,12 +185,16 @@ def verify_chain(records: Sequence[dict[str, Any]], public_key: Ed25519PublicKey
 
 
 def replay_decisions(records: Sequence[dict[str, Any]], policy_dir: Path, report: Report) -> None:
-    """Re-run classify and decide on each decision record's signals and compare."""
+    """Re-run classify and decide on each decision's recorded signals and compare."""
+    detections: dict[str, dict[str, Any]] = {}
     for record in records[: report.records]:
+        if record["event"] == EVENT_DETECTION:
+            detections[record["audit_id"]] = record["body"]
+            continue
         if record["event"] != EVENT_DECISION:
             continue
         try:
-            problem = _replay_one(record, policy_dir)
+            problem = _replay_one(record, detections.get(record["audit_id"]), policy_dir)
         except (KeyError, TypeError, ValueError):
             # Possible only if someone holding the signing key wrote a broken record.
             problem = "record body is malformed and cannot be replayed"
@@ -186,7 +203,9 @@ def replay_decisions(records: Sequence[dict[str, Any]], policy_dir: Path, report
             report.replay_problems.append(Problem(record["seq"], problem))
 
 
-def _replay_one(record: dict[str, Any], policy_dir: Path) -> str | None:  # noqa: PLR0911
+def _replay_one(  # noqa: PLR0911
+    record: dict[str, Any], detection: dict[str, Any] | None, policy_dir: Path
+) -> str | None:
     body = record["body"]
     recorded = body["decision"]
 
@@ -206,7 +225,10 @@ def _replay_one(record: dict[str, Any], policy_dir: Path) -> str | None:  # noqa
     except PolicyError:
         return f"policy snapshot {sha256[:12]} is not a valid policy"
 
-    classification = classify(signals_from_evidence(body["signals"]), policy)
+    signals = recorded_signals(body, detection)
+    if signals is None:
+        return "no detection record to replay the decision from"
+    classification = classify(signals_from_evidence(signals), policy)
     if classification.label.value != body["classification"]["label"]:
         return (
             f"classification replays as {classification.label.value}, "

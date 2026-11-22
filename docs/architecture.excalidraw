@@ -1,7 +1,7 @@
 {
   "type": "excalidraw",
   "version": 2,
-  "source": "https://excalidraw.com",
+  "source": "https://marketplace.visualstudio.com/items?itemName=pomdtr.excalidraw-editor",
   "elements": [
     {
       "id": "text-1",
@@ -9,7 +9,7 @@
       "x": 40,
       "y": 18,
       "width": 633.3599999999999,
-      "height": 35.0,
+      "height": 35,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -22,11 +22,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 107919,
-      "version": 1,
-      "versionNonce": 604729,
+      "version": 2,
+      "versionNonce": 91861693,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "Sovereign Control Plane — system design",
@@ -37,7 +37,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "a0"
     },
     {
       "id": "text-2",
@@ -45,7 +46,7 @@
       "x": 40,
       "y": 60,
       "width": 965.1199999999999,
-      "height": 20.0,
+      "height": 20,
       "angle": 0,
       "strokeColor": "#495057",
       "backgroundColor": "transparent",
@@ -58,11 +59,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 115838,
-      "version": 1,
-      "versionNonce": 709458,
+      "version": 2,
+      "versionNonce": 1849533331,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "One request:  Inspect → Decide → Enforce → Audit.   Every decision leaves signed, hash-chained evidence.",
@@ -73,7 +74,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "a1"
     },
     {
       "id": "rectangle-3",
@@ -96,13 +98,14 @@
         "type": 3
       },
       "seed": 123757,
-      "version": 1,
-      "versionNonce": 814187,
+      "version": 2,
+      "versionNonce": 1485722397,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a2"
     },
     {
       "id": "text-4",
@@ -110,7 +113,7 @@
       "x": 58,
       "y": 162,
       "width": 241.27999999999997,
-      "height": 20.0,
+      "height": 20,
       "angle": 0,
       "strokeColor": "#495057",
       "backgroundColor": "transparent",
@@ -123,11 +126,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 131676,
-      "version": 1,
-      "versionNonce": 918916,
+      "version": 2,
+      "versionNonce": 2089400627,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "CLIENTS  (untrusted input)",
@@ -138,13 +141,14 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "a3"
     },
     {
       "id": "rectangle-5",
       "type": "rectangle",
-      "x": 440,
-      "y": 90,
+      "x": 437.65995319455305,
+      "y": 124.02230701774954,
       "width": 1440,
       "height": 790,
       "angle": 0,
@@ -161,13 +165,14 @@
         "type": 3
       },
       "seed": 139595,
-      "version": 1,
-      "versionNonce": 1023645,
+      "version": 106,
+      "versionNonce": 477633341,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795158781664,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a4"
     },
     {
       "id": "text-6",
@@ -175,7 +180,7 @@
       "x": 458,
       "y": 102,
       "width": 603.1999999999999,
-      "height": 20.0,
+      "height": 20,
       "angle": 0,
       "strokeColor": "#2f9e44",
       "backgroundColor": "transparent",
@@ -188,11 +193,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 147514,
-      "version": 1,
-      "versionNonce": 1128374,
+      "version": 2,
+      "versionNonce": 1073879763,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "SOVEREIGN TRUST BOUNDARY  ·  docker compose network + data volume",
@@ -203,7 +208,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "a5"
     },
     {
       "id": "rectangle-7",
@@ -226,13 +232,14 @@
         "type": 3
       },
       "seed": 155433,
-      "version": 1,
-      "versionNonce": 1233103,
+      "version": 2,
+      "versionNonce": 1289744349,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a6"
     },
     {
       "id": "text-8",
@@ -240,7 +247,7 @@
       "x": 2058,
       "y": 392,
       "width": 259.84,
-      "height": 20.0,
+      "height": 20,
       "angle": 0,
       "strokeColor": "#e03131",
       "backgroundColor": "transparent",
@@ -253,11 +260,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 163352,
-      "version": 1,
-      "versionNonce": 1337832,
+      "version": 2,
+      "versionNonce": 1698515059,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "EXTERNAL  (outside boundary)",
@@ -268,7 +275,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "a7"
     },
     {
       "id": "ui",
@@ -291,8 +299,8 @@
         "type": 3
       },
       "seed": 171271,
-      "version": 1,
-      "versionNonce": 1442561,
+      "version": 2,
+      "versionNonce": 242215997,
       "isDeleted": false,
       "boundElements": [
         {
@@ -300,9 +308,10 @@
           "id": "text-10"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "a8"
     },
     {
       "id": "text-10",
@@ -323,11 +332,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 179190,
-      "version": 1,
-      "versionNonce": 1547290,
+      "version": 2,
+      "versionNonce": 1107411475,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "React UI\nplayground · audit log\npolicy view",
@@ -338,7 +347,8 @@
       "verticalAlign": "middle",
       "containerId": "ui",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "a9"
     },
     {
       "id": "curl",
@@ -361,8 +371,8 @@
         "type": 3
       },
       "seed": 187109,
-      "version": 1,
-      "versionNonce": 1652019,
+      "version": 2,
+      "versionNonce": 696343709,
       "isDeleted": false,
       "boundElements": [
         {
@@ -370,17 +380,18 @@
           "id": "text-12"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aA"
     },
     {
       "id": "text-12",
       "type": "text",
       "x": 104.1,
-      "y": 330.0,
+      "y": 330,
       "width": 121.8,
-      "height": 35.0,
+      "height": 35,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -393,11 +404,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 195028,
-      "version": 1,
-      "versionNonce": 1756748,
+      "version": 2,
+      "versionNonce": 793118643,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "curl / workload\nany HTTP client",
@@ -408,7 +419,8 @@
       "verticalAlign": "middle",
       "containerId": "curl",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aB"
     },
     {
       "id": "ingress",
@@ -431,8 +443,8 @@
         "type": 3
       },
       "seed": 202947,
-      "version": 1,
-      "versionNonce": 1861477,
+      "version": 2,
+      "versionNonce": 1439023357,
       "isDeleted": false,
       "boundElements": [
         {
@@ -444,17 +456,18 @@
           "id": "arrow-43"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aC"
     },
     {
       "id": "text-14",
       "type": "text",
       "x": 509.44,
-      "y": 250.0,
+      "y": 250,
       "width": 211.11999999999998,
-      "height": 70.0,
+      "height": 70,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -467,11 +480,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 210866,
-      "version": 1,
-      "versionNonce": 1966206,
+      "version": 2,
+      "versionNonce": 590387539,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "1 · INGRESS API\nstrict schema · size limit\nUnicode normalization\nevery request is untrusted",
@@ -482,7 +495,8 @@
       "verticalAlign": "middle",
       "containerId": "ingress",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aD"
     },
     {
       "id": "detection",
@@ -505,8 +519,8 @@
         "type": 3
       },
       "seed": 218785,
-      "version": 1,
-      "versionNonce": 2070935,
+      "version": 2,
+      "versionNonce": 1488886109,
       "isDeleted": false,
       "boundElements": [
         {
@@ -522,17 +536,18 @@
           "id": "arrow-44"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aE"
     },
     {
       "id": "text-16",
       "type": "text",
       "x": 807.26,
-      "y": 241.25,
+      "y": 250,
       "width": 235.48,
-      "height": 87.5,
+      "height": 70,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -545,22 +560,23 @@
       "frameId": null,
       "roundness": null,
       "seed": 226704,
-      "version": 1,
-      "versionNonce": 2175664,
+      "version": 2,
+      "versionNonce": 186119923,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
-      "text": "2 · DETECTION  (inspect)\nPresidio: NER + checksums\nsecret & credential rules\nLLM: confidential + injection\n→ findings: type, span, score",
-      "originalText": "2 · DETECTION  (inspect)\nPresidio: NER + checksums\nsecret & credential rules\nLLM: confidential + injection\n→ findings: type, span, score",
+      "text": "2 · DETECTION  (inspect)\nPresidio: NER + checksums\nsecret & credential rules\n→ findings: type, span, score",
+      "originalText": "2 · DETECTION  (inspect)\nPresidio: NER + checksums\nsecret & credential rules\n→ findings: type, span, score",
       "fontSize": 14,
       "fontFamily": 5,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "detection",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aF"
     },
     {
       "id": "policy",
@@ -583,8 +599,8 @@
         "type": 3
       },
       "seed": 234623,
-      "version": 1,
-      "versionNonce": 2280393,
+      "version": 2,
+      "versionNonce": 1270703549,
       "isDeleted": false,
       "boundElements": [
         {
@@ -608,17 +624,18 @@
           "id": "arrow-57"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aG"
     },
     {
       "id": "text-18",
       "type": "text",
       "x": 1109.14,
-      "y": 250.0,
+      "y": 250,
       "width": 251.71999999999997,
-      "height": 70.0,
+      "height": 70,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -631,11 +648,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 242542,
-      "version": 1,
-      "versionNonce": 2385122,
+      "version": 2,
+      "versionNonce": 1703059603,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "3 · POLICY ENGINE  (decide)\npure function, first match wins\ndefault action: block\n→ action + rule id + rationale",
@@ -646,7 +663,8 @@
       "verticalAlign": "middle",
       "containerId": "policy",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aH"
     },
     {
       "id": "enforce",
@@ -669,8 +687,8 @@
         "type": 3
       },
       "seed": 250461,
-      "version": 1,
-      "versionNonce": 2489851,
+      "version": 2,
+      "versionNonce": 568567325,
       "isDeleted": false,
       "boundElements": [
         {
@@ -694,17 +712,18 @@
           "id": "arrow-51"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aI"
     },
     {
       "id": "text-20",
       "type": "text",
       "x": 1503.2,
-      "y": 250.0,
+      "y": 250,
       "width": 243.6,
-      "height": 70.0,
+      "height": 70,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -717,11 +736,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 258380,
-      "version": 1,
-      "versionNonce": 2594580,
+      "version": 2,
+      "versionNonce": 472323635,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "4 · ENFORCEMENT\nallow · redact · block · route\nsame input + same policy\n→ same outcome",
@@ -732,7 +751,8 @@
       "verticalAlign": "middle",
       "containerId": "enforce",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aJ"
     },
     {
       "id": "policyfile",
@@ -755,8 +775,8 @@
         "type": 3
       },
       "seed": 266299,
-      "version": 1,
-      "versionNonce": 2699309,
+      "version": 2,
+      "versionNonce": 1847777917,
       "isDeleted": false,
       "boundElements": [
         {
@@ -768,9 +788,10 @@
           "id": "arrow-46"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aK"
     },
     {
       "id": "text-22",
@@ -778,7 +799,7 @@
       "x": 1084.78,
       "y": 134.5,
       "width": 300.44,
-      "height": 35.0,
+      "height": 35,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -791,11 +812,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 274218,
-      "version": 1,
-      "versionNonce": 2804038,
+      "version": 2,
+      "versionNonce": 501995475,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "policy/policy.yaml\nrules · thresholds · egress allowlist",
@@ -806,7 +827,8 @@
       "verticalAlign": "middle",
       "containerId": "policyfile",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aL"
     },
     {
       "id": "block",
@@ -829,8 +851,8 @@
         "type": 3
       },
       "seed": 282137,
-      "version": 1,
-      "versionNonce": 2908767,
+      "version": 2,
+      "versionNonce": 1765573341,
       "isDeleted": false,
       "boundElements": [
         {
@@ -846,9 +868,10 @@
           "id": "arrow-59"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aM"
     },
     {
       "id": "text-24",
@@ -869,11 +892,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 290056,
-      "version": 1,
-      "versionNonce": 3013496,
+      "version": 2,
+      "versionNonce": 954688883,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "BLOCK\nrefusal returned\nno model call",
@@ -884,7 +907,8 @@
       "verticalAlign": "middle",
       "containerId": "block",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aN"
     },
     {
       "id": "sovereign",
@@ -907,8 +931,8 @@
         "type": 3
       },
       "seed": 297975,
-      "version": 1,
-      "versionNonce": 3118225,
+      "version": 2,
+      "versionNonce": 935468861,
       "isDeleted": false,
       "boundElements": [
         {
@@ -924,9 +948,10 @@
           "id": "arrow-55"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aO"
     },
     {
       "id": "text-26",
@@ -947,11 +972,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 305894,
-      "version": 1,
-      "versionNonce": 3222954,
+      "version": 2,
+      "versionNonce": 878722835,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "SOVEREIGN MODEL\nOllama, in boundary\nunredacted prompt",
@@ -962,7 +987,8 @@
       "verticalAlign": "middle",
       "containerId": "sovereign",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aP"
     },
     {
       "id": "egress",
@@ -985,8 +1011,8 @@
         "type": 3
       },
       "seed": 313813,
-      "version": 1,
-      "versionNonce": 3327683,
+      "version": 2,
+      "versionNonce": 1880436637,
       "isDeleted": false,
       "boundElements": [
         {
@@ -1006,9 +1032,10 @@
           "id": "arrow-56"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aQ"
     },
     {
       "id": "text-28",
@@ -1029,11 +1056,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 321732,
-      "version": 1,
-      "versionNonce": 3432412,
+      "version": 2,
+      "versionNonce": 718070963,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "EGRESS GATEWAY\nallowlist · default deny\npayload hash recorded",
@@ -1044,7 +1071,8 @@
       "verticalAlign": "middle",
       "containerId": "egress",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aR"
     },
     {
       "id": "external",
@@ -1067,8 +1095,8 @@
         "type": 3
       },
       "seed": 329651,
-      "version": 1,
-      "versionNonce": 3537141,
+      "version": 2,
+      "versionNonce": 1617376253,
       "isDeleted": false,
       "boundElements": [
         {
@@ -1080,16 +1108,17 @@
           "id": "arrow-53"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aS"
     },
     {
       "id": "text-30",
       "type": "text",
       "x": 2078.5,
       "y": 466.25,
-      "width": 203.0,
+      "width": 203,
       "height": 52.5,
       "angle": 0,
       "strokeColor": "#1e1e1e",
@@ -1103,22 +1132,23 @@
       "frameId": null,
       "roundness": null,
       "seed": 337570,
-      "version": 1,
-      "versionNonce": 3641870,
+      "version": 2,
+      "versionNonce": 601085523,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
-      "text": "Anthropic Claude API\nexternal model\n(labelled stub if no key)",
-      "originalText": "Anthropic Claude API\nexternal model\n(labelled stub if no key)",
+      "text": "Anthropic Claude API\nexternal model\nClaude Haiku 5.5",
+      "originalText": "Anthropic Claude API\nexternal model\nClaude Haiku 5.5",
       "fontSize": 14,
       "fontFamily": 5,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "external",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aT"
     },
     {
       "id": "scan",
@@ -1141,8 +1171,8 @@
         "type": 3
       },
       "seed": 345489,
-      "version": 1,
-      "versionNonce": 3746599,
+      "version": 2,
+      "versionNonce": 347712605,
       "isDeleted": false,
       "boundElements": [
         {
@@ -1162,17 +1192,18 @@
           "id": "arrow-60"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aU"
     },
     {
       "id": "text-32",
       "type": "text",
       "x": 1484.48,
-      "y": 630.0,
+      "y": 630,
       "width": 341.03999999999996,
-      "height": 35.0,
+      "height": 35,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -1185,11 +1216,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 353408,
-      "version": 1,
-      "versionNonce": 3851328,
+      "version": 2,
+      "versionNonce": 1850446835,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "5 · OUTPUT SCAN\nscan model response · restore placeholders",
@@ -1200,7 +1231,8 @@
       "verticalAlign": "middle",
       "containerId": "scan",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aV"
     },
     {
       "id": "audit",
@@ -1223,8 +1255,8 @@
         "type": 3
       },
       "seed": 361327,
-      "version": 1,
-      "versionNonce": 3956057,
+      "version": 2,
+      "versionNonce": 484317373,
       "isDeleted": false,
       "boundElements": [
         {
@@ -1248,16 +1280,17 @@
           "id": "arrow-62"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aW"
     },
     {
       "id": "text-34",
       "type": "text",
-      "x": 727.46,
+      "x": 791.58056640625,
       "y": 783.75,
-      "width": 885.0799999999999,
+      "width": 756.8388671875,
       "height": 52.5,
       "angle": 0,
       "strokeColor": "#1e1e1e",
@@ -1271,11 +1304,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 369246,
-      "version": 1,
-      "versionNonce": 4060786,
+      "version": 3,
+      "versionNonce": 1248500307,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795158951497,
       "link": null,
       "locked": false,
       "text": "AUDIT LOG  ·  tamper-evident evidence\nappend-only JSONL · SHA-256 hash chain · Ed25519 signature per record · signed receipt returned to the caller\nstores keyed hashes (HMAC), never raw private values · each policy version snapshotted by its SHA-256",
@@ -1286,7 +1319,8 @@
       "verticalAlign": "middle",
       "containerId": "audit",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aX"
     },
     {
       "id": "verifier",
@@ -1309,8 +1343,8 @@
         "type": 3
       },
       "seed": 377165,
-      "version": 1,
-      "versionNonce": 4165515,
+      "version": 2,
+      "versionNonce": 309721373,
       "isDeleted": false,
       "boundElements": [
         {
@@ -1322,16 +1356,17 @@
           "id": "arrow-62"
         }
       ],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aY"
     },
     {
       "id": "text-36",
       "type": "text",
       "x": 78.5,
       "y": 783.75,
-      "width": 203.0,
+      "width": 203,
       "height": 52.5,
       "angle": 0,
       "strokeColor": "#1e1e1e",
@@ -1345,11 +1380,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 385084,
-      "version": 1,
-      "versionNonce": 4270244,
+      "version": 2,
+      "versionNonce": 1926722355,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "AUDITOR  ·  verifier CLI\nchecks chain + signatures\nreplays every decision",
@@ -1360,7 +1395,8 @@
       "verticalAlign": "middle",
       "containerId": "verifier",
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "aZ"
     },
     {
       "id": "rectangle-37",
@@ -1385,13 +1421,14 @@
         "type": 3
       },
       "seed": 393003,
-      "version": 1,
-      "versionNonce": 4374973,
+      "version": 2,
+      "versionNonce": 1592970621,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
-      "locked": false
+      "locked": false,
+      "index": "aa"
     },
     {
       "id": "text-38",
@@ -1414,11 +1451,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 400922,
-      "version": 1,
-      "versionNonce": 4479702,
+      "version": 2,
+      "versionNonce": 1485346003,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "FAIL CLOSED — when unsure, protect\n• detector error or timeout → assume private\n• only low-confidence findings → treat as private\n• policy missing or invalid → block everything\n• no rule matches → block\n• decision record not written → 503, no model call\n• sovereign model down → block, never external\n• destination not allowlisted → egress refused\n• output scan or outcome record fails → withhold response",
@@ -1429,7 +1466,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "ab"
     },
     {
       "id": "arrow-39",
@@ -1452,11 +1490,11 @@
         "type": 2
       },
       "seed": 408841,
-      "version": 1,
-      "versionNonce": 4584431,
+      "version": 2,
+      "versionNonce": 1100355037,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1474,7 +1512,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ac"
     },
     {
       "id": "text-40",
@@ -1495,11 +1534,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 416760,
-      "version": 1,
-      "versionNonce": 4689160,
+      "version": 2,
+      "versionNonce": 1524925043,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "POST /v1/inference",
@@ -1510,7 +1549,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "ad"
     },
     {
       "id": "arrow-41",
@@ -1533,11 +1573,11 @@
         "type": 2
       },
       "seed": 424679,
-      "version": 1,
-      "versionNonce": 4793889,
+      "version": 2,
+      "versionNonce": 359748157,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1555,7 +1595,8 @@
       "endBinding": null,
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ae"
     },
     {
       "id": "text-42",
@@ -1576,11 +1617,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 432598,
-      "version": 1,
-      "versionNonce": 4898618,
+      "version": 2,
+      "versionNonce": 850508819,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "decision · response\n+ signed receipt",
@@ -1591,7 +1632,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "af"
     },
     {
       "id": "arrow-43",
@@ -1614,11 +1656,11 @@
         "type": 2
       },
       "seed": 440517,
-      "version": 1,
-      "versionNonce": 5003347,
+      "version": 2,
+      "versionNonce": 1466303133,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1644,7 +1686,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ag"
     },
     {
       "id": "arrow-44",
@@ -1667,11 +1710,11 @@
         "type": 2
       },
       "seed": 448436,
-      "version": 1,
-      "versionNonce": 5108076,
+      "version": 2,
+      "versionNonce": 1004978611,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1697,7 +1740,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ah"
     },
     {
       "id": "arrow-45",
@@ -1720,11 +1764,11 @@
         "type": 2
       },
       "seed": 456355,
-      "version": 1,
-      "versionNonce": 5212805,
+      "version": 2,
+      "versionNonce": 1814406909,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1750,7 +1794,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ai"
     },
     {
       "id": "arrow-46",
@@ -1773,11 +1818,11 @@
         "type": 2
       },
       "seed": 464274,
-      "version": 1,
-      "versionNonce": 5317534,
+      "version": 2,
+      "versionNonce": 262804307,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1803,7 +1848,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aj"
     },
     {
       "id": "arrow-47",
@@ -1826,11 +1872,11 @@
         "type": 2
       },
       "seed": 472193,
-      "version": 1,
-      "versionNonce": 5422263,
+      "version": 2,
+      "versionNonce": 640794461,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1856,7 +1902,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ak"
     },
     {
       "id": "text-48",
@@ -1877,11 +1924,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 480112,
-      "version": 1,
-      "versionNonce": 5526992,
+      "version": 2,
+      "versionNonce": 1582444787,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "block",
@@ -1892,7 +1939,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "al"
     },
     {
       "id": "arrow-49",
@@ -1915,11 +1963,11 @@
         "type": 2
       },
       "seed": 488031,
-      "version": 1,
-      "versionNonce": 5631721,
+      "version": 2,
+      "versionNonce": 198953917,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -1945,7 +1993,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "am"
     },
     {
       "id": "text-50",
@@ -1966,11 +2015,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 495950,
-      "version": 1,
-      "versionNonce": 5736450,
+      "version": 2,
+      "versionNonce": 157653651,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "route",
@@ -1981,7 +2030,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "an"
     },
     {
       "id": "arrow-51",
@@ -2004,11 +2054,11 @@
         "type": 2
       },
       "seed": 503869,
-      "version": 1,
-      "versionNonce": 5841179,
+      "version": 2,
+      "versionNonce": 1564822557,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2034,7 +2084,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ao"
     },
     {
       "id": "text-52",
@@ -2055,11 +2106,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 511788,
-      "version": 1,
-      "versionNonce": 5945908,
+      "version": 2,
+      "versionNonce": 2107297843,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "allow / redact",
@@ -2070,7 +2121,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "ap"
     },
     {
       "id": "arrow-53",
@@ -2093,11 +2145,11 @@
         "type": 2
       },
       "seed": 519707,
-      "version": 1,
-      "versionNonce": 6050637,
+      "version": 2,
+      "versionNonce": 1516224637,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2123,7 +2175,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aq"
     },
     {
       "id": "text-54",
@@ -2144,11 +2197,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 527626,
-      "version": 1,
-      "versionNonce": 6155366,
+      "version": 2,
+      "versionNonce": 1289245139,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "egress only when\npolicy allows it",
@@ -2159,7 +2212,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "ar"
     },
     {
       "id": "arrow-55",
@@ -2182,11 +2236,11 @@
         "type": 2
       },
       "seed": 535545,
-      "version": 1,
-      "versionNonce": 6260095,
+      "version": 2,
+      "versionNonce": 1223469277,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2212,7 +2266,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "as"
     },
     {
       "id": "arrow-56",
@@ -2235,11 +2290,11 @@
         "type": 2
       },
       "seed": 543464,
-      "version": 1,
-      "versionNonce": 6364824,
+      "version": 2,
+      "versionNonce": 137666419,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2265,7 +2320,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "at"
     },
     {
       "id": "arrow-57",
@@ -2288,11 +2344,11 @@
         "type": 2
       },
       "seed": 551383,
-      "version": 1,
-      "versionNonce": 6469553,
+      "version": 2,
+      "versionNonce": 981304637,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2318,7 +2374,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "au"
     },
     {
       "id": "text-58",
@@ -2339,11 +2396,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 559302,
-      "version": 1,
-      "versionNonce": 6574282,
+      "version": 2,
+      "versionNonce": 1509308691,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "DECISION record — written before any model call",
@@ -2354,7 +2411,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "av"
     },
     {
       "id": "arrow-59",
@@ -2377,11 +2435,11 @@
         "type": 2
       },
       "seed": 567221,
-      "version": 1,
-      "versionNonce": 6679011,
+      "version": 2,
+      "versionNonce": 309581213,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2407,7 +2465,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "aw"
     },
     {
       "id": "arrow-60",
@@ -2430,11 +2489,11 @@
         "type": 2
       },
       "seed": 575140,
-      "version": 1,
-      "versionNonce": 6783740,
+      "version": 2,
+      "versionNonce": 1603509939,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2460,7 +2519,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "ax"
     },
     {
       "id": "text-61",
@@ -2481,11 +2541,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 583059,
-      "version": 1,
-      "versionNonce": 6888469,
+      "version": 2,
+      "versionNonce": 1275140605,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "OUTCOME record —\nwhat actually happened",
@@ -2496,7 +2556,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "ay"
     },
     {
       "id": "arrow-62",
@@ -2519,11 +2580,11 @@
         "type": 2
       },
       "seed": 590978,
-      "version": 1,
-      "versionNonce": 6993198,
+      "version": 2,
+      "versionNonce": 1135824979,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "points": [
@@ -2549,7 +2610,8 @@
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",
-      "elbowed": false
+      "elbowed": false,
+      "index": "az"
     },
     {
       "id": "text-63",
@@ -2570,11 +2632,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 598897,
-      "version": 1,
-      "versionNonce": 7097927,
+      "version": 2,
+      "versionNonce": 2544221,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "outcome",
@@ -2585,7 +2647,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "b00"
     },
     {
       "id": "text-64",
@@ -2606,11 +2669,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 606816,
-      "version": 1,
-      "versionNonce": 7202656,
+      "version": 2,
+      "versionNonce": 405523955,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "audit.jsonl\n+ public key",
@@ -2621,7 +2684,8 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "b01"
     },
     {
       "id": "text-65",
@@ -2642,11 +2706,11 @@
       "frameId": null,
       "roundness": null,
       "seed": 614735,
-      "version": 1,
-      "versionNonce": 7307385,
+      "version": 2,
+      "versionNonce": 733380285,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1763510400000,
+      "updated": 1795157350913,
       "link": null,
       "locked": false,
       "text": "Nothing leaves the boundary except through the egress gateway.  Detection, policy, the sovereign model, the audit log and its signing key all stay inside.",
@@ -2657,11 +2721,14 @@
       "verticalAlign": "top",
       "containerId": null,
       "autoResize": true,
-      "lineHeight": 1.25
+      "lineHeight": 1.25,
+      "index": "b02"
     }
   ],
   "appState": {
-    "gridSize": null,
+    "gridSize": 20,
+    "gridStep": 5,
+    "gridModeEnabled": false,
     "viewBackgroundColor": "#ffffff"
   },
   "files": {}

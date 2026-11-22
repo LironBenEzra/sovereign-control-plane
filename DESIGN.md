@@ -30,7 +30,7 @@ Three guarantees follow from that order and from how each step is built:
 
 **Inside the boundary:** the control plane process, the three detectors and the models they use (the NER model, and the local model on Ollama, which the semantic detector shares with the sovereign model), the policy file, the sovereign model (Ollama), the audit log, the policy snapshots and the two keys. In the Docker setup this is the Compose network plus one data volume. The hosted demo runs the same stack on one EC2 instance, where Caddy terminates HTTPS and is the only published port. The Ollama container publishes no port, so it is reachable only from inside that network.
 
-**Outside the boundary:** the external model provider (Anthropic's API, or its labelled stub).
+**Outside the boundary:** the external model provider, Anthropic's Claude API.
 
 **The caller** is assumed to be inside: a workload or user in the same organization that already holds the data it sends. That is why a response may contain the caller's own private data (for example after the sovereign model answers), and why restored placeholders are safe to return. The caller's *input* is still untrusted: it can be malformed, oversized or crafted to evade detection.
 
@@ -52,13 +52,13 @@ The code is in [src/control_plane/pipeline.py](src/control_plane/pipeline.py). O
 1. **Ingress** ([api.py](src/control_plane/api.py)). The body is read with a hard byte cap, counted as it streams, because `Content-Length` can be missing or false. It must be JSON with exactly one field, `prompt`, a non-empty string under the length limit. Unknown fields are rejected. A rejected request is audited too (`received` with the reason, then a built-in block decision and its outcome), but its content is never stored or inspected.
 2. **Normalize and record the arrival.** The prompt is NFKC-normalized and invisible characters (zero-width space, soft hyphen and similar) are removed. This stops a prompt that hides a zero-width space inside the word `password` from slipping past a pattern. The normalized text is what gets inspected *and* what gets forwarded, so the model never sees anything the detectors did not. The `received` record (keyed hash, length, claimed client) is written before anything else; if it cannot be written, the request ends with HTTP 503 and nothing was inspected.
 3. **Load the policy.** The file is re-read on every request. If its SHA-256 changed, a `policy_loaded` record is written, so the log shows which policy was in force between which records.
-4. **Detect.** The three detectors run in parallel under one time budget. Their findings are merged into `Signals`, and the `detection` record says which detectors ran, which failed and with what error, how many findings of each type there were (`"findings": 0` when nothing was found), and how long it took.
+4. **Detect.** The detectors run in two stages under one time budget. Patterns and Presidio run first, in parallel. Every value they found that the policy counts is masked, as a `redact` decision would mask it, and only then does the semantic detector read the prompt, so no model reads a value the policy keeps from models. If either of the two fails, the semantic detector does not run at all. Its findings are mapped back to positions in the prompt. All findings are merged into `Signals`, and the `detection` record says which detectors ran, which failed and with what error, how many findings of each type there were (`"findings": 0` when nothing was found), and how long it took.
 5. **Classify and mask.** Findings plus policy thresholds give a label and a set of categories. The prompt is masked once, replacing every finding the policy counts with its placeholder, and the `detection` record is written with that masked prompt. A `redact` decision sends the same text, so the log shows exactly what left the boundary.
 6. **Decide.** First matching rule wins.
 7. **Write the decision record.** If this fails, the request ends with HTTP 503 and no model was called.
 8. **Enforce.** Just before a model is called, a `model_call` record names the model, whether it is inside the boundary, the payload length, what was redacted, and for an external call the SHA-256 of the payload. A call the egress gateway refuses is not recorded as a call; the outcome says why it was refused.
-9. **Scan the model's output** with the same detectors and apply the policy's response rules. The semantic detector is not run on the answer unless a response rule removes what it finds (see section 4).
-10. **Write the outcome record.** If this fails, the answer is withheld (503). If an unexpected exception stopped the request at any step, an `error` record takes its place, naming the step and the exception class (never its message, which can quote the prompt), and the API returns HTTP 500 with the audit ID.
+9. **Scan the model's output** with the same detectors and apply the policy's response rules. The semantic detector is not run on the answer unless a response rule removes what it finds (see section 4). A `model_reply` record says what the scan found and what the response rules redacted again, and for an answer from outside the boundary keeps the answer as it came back, with every private value masked. If it cannot be written, the answer is withheld (503).
+10. **Put the values back and write the outcome record.** After a `redact`, the placeholders in the answer are replaced with the original values, inside the boundary, and the outcome names which ones. If the outcome cannot be written, the answer is withheld (503). If an unexpected exception stopped the request at any step, an `error` record takes its place, naming the step and the exception class (never its message, which can quote the prompt), and the API returns HTTP 500 with the audit ID.
 11. **Respond** with the decision, the explanation, the answer and a receipt for both records.
 
 ## 4. Detection
@@ -85,6 +85,7 @@ Why this choice:
 
 A model in the decision path needs more care. This is how the semantic detector is kept safe:
 
+- **It reads the prompt with the values masked.** Patterns and Presidio run first, and every value they found that the policy counts is replaced by its placeholder (`<PERSON_1>`) before the model reads the text: the same text a `redact` decision sends. So `block-secrets` ("never sent to any model") holds for this model too, and it judges what the text is about, which the placeholders keep. Its finding is mapped back to the span of the original prompt. If one of the two fails, a value it would have found is not masked, so the model is not called at all: the detection record lists only the two, and the prompt fails closed on the failure. The cost is that such a prompt is not checked for injection. It still stays inside the boundary. The cost is Presidio's time, milliseconds, before the model starts.
 - **It can only add findings.** The worst a prompt can do is talk the model into answering `none` or `false`. It then gets exactly the protection the other two detectors give, which is what it had before this detector existed. The instruction also says the text is data, not instructions, and one of the few-shot examples is an injection attempt labelled correctly.
 - **Its answers are constrained.** Temperature 0, a fixed seed, and a JSON schema that allows only a category from the list, or true or false. Anything else is an error, and an error fails closed.
 - **It records no reason.** Only the category and the span. A reason written by the model could quote the confidential text into the audit log.
@@ -95,7 +96,7 @@ A model in the decision path needs more care. This is how the semantic detector 
 
 **Not on the answer.** The output scan does not run the semantic detector unless a response rule removes what it finds. The answer has already been routed, and judging it would add a model call and a new way for the answer to be withheld, for findings nothing acts on. The detector is skipped, not run with nothing to look for: a run that did no work would count as a success and clear a failure that `/healthz` should still report.
 
-**How well it works.** `make eval-semantic` runs it on 48 hand-written prompts that are not among its examples: 18 confidential (launch plans, meeting notes, unpublished results, a bid, a reorganization, a security incident), 9 injections (direct overrides, a persona without rules, instruction extraction, orders hidden in a support ticket, a résumé and a web page, an attempt to slip past a filter), and ordinary prompts chosen to be close to both (public product news, meeting templates, questions about prompt injection, harmless role-play, "ignore the first paragraph").
+**How well it works.** `make eval-semantic` runs it on 48 hand-written prompts that are not among its examples (unmasked; masking changes only one of them, two names in meeting notes, and that one is still judged `INTERNAL_MEETING`): 18 confidential (launch plans, meeting notes, unpublished results, a bid, a reorganization, a security incident), 9 injections (direct overrides, a persona without rules, instruction extraction, orders hidden in a support ticket, a résumé and a web page, an attempt to slip past a filter), and ordinary prompts chosen to be close to both (public product news, meeting templates, questions about prompt injection, harmless role-play, "ignore the first paragraph").
 
 - Confidential: 17 of 18 caught, 26 of 30 others let through. On the original 32 prompts, `llama3.2:3b` caught 15 of 16 and `llama3.2:1b` 13, and `1b` was talked out of a finding by an injection attempt. That is why the one local model is `3b`.
 - Injection: 9 of 9 caught, none of the other 39 flagged. The injection prompt was revised once after its first measurement, which caught 5 of 9 and flagged two confidential summaries as injections. The evaluation prompts were not changed.
@@ -174,17 +175,20 @@ A request leaves these records, in this order, all carrying its `audit_id`:
 | Event | Written | What it holds |
 |---|---|---|
 | `received` | As soon as the prompt arrives, before the policy is loaded or any detector runs | Keyed hash and length of the prompt, whether normalization changed it, the claimed client, or why the request was rejected |
-| `detection` | When the detectors finish | Each detector's name, version and status with its error class, the number of findings by entity type (`0` means nothing was found), the masked prompt, and the time taken |
-| `decision` | Before any model is called | Everything the decision was made from, and the decision (below) |
+| `detection` | When the detectors finish | The signals: each detector's name, version and status with its error class, and every finding with its type, span and score, the detector and recognizer that found it, and whether the decision counted it (never the matched value; an empty list means nothing was found). Also the number of findings by entity type, the masked prompt, and the time taken |
+| `decision` | Before any model is called | The rest of what the decision was made from, and the decision (below) |
 | `model_call` | Just before a model is called, only if one is | The model and provider, inside or outside the boundary, stub or not, the payload length and redactions, and for an external call the payload's SHA-256 |
+| `model_reply` | When the model's answer is back and scanned, before anything is returned | The answer's length; the output scan, recorded like the detection record's signals; what the response rules redacted, by entity type; and for an answer from outside the boundary, the answer as it came back with every private value masked |
 | `outcome` | After the request is finished | What was actually done (below) |
 | `error` | Instead of the outcome, when an unexpected exception stopped the request | The step that failed (`policy`, `detection`, `decision` or `enforcement`) and the exception class |
 
-A request blocked by policy has no `model_call`. A request refused before inspection (rejected at the door, or no usable policy) has no `detection` either. Two more events are not tied to a request: `policy_loaded` when the server first sees a policy version, and `policy_changed` when an administrator changes it.
+A request blocked by policy has no `model_call`, and one whose model did not answer has no `model_reply`. A request refused before inspection (rejected at the door, or no usable policy) has no `detection` either. Two more events are not tied to a request: `policy_loaded` when the server first sees a policy version, and `policy_changed` when someone changes it: an administrator, or on the hosted demo, where editing is open, a visitor.
 
-A **decision** body contains everything the decision was made from: the request (keyed hash of the prompt, its length, whether normalization changed it), the signals (each detector's name, version and status, and every finding with type, span, score and recognizer, but never the matched value), the classification, the policy id, version and SHA-256, and the action with its rule id and rationale.
+A **decision** body contains, with the signals in the detection record, everything the decision was made from: the request (keyed hash of the prompt, its length, whether normalization changed it), the classification, the policy id, version and SHA-256, and the action with its rule id and rationale. The signals are kept once, in the detection record; decision records written before 2026-11-21 also kept a copy, and the verifier still reads those.
 
-An **outcome** body contains what was actually done: the redaction counts, which model was called, whether it is inside the boundary, whether it is a stub, which model actually served the answer, the latency, and for external calls the destination, whether the gateway allowed it, and the SHA-256 and length of the payload that was sent. The payload hash is a plain SHA-256 on purpose, so it can be compared with the provider's own logs.
+A **model reply** body keeps the answer's text only when it came from outside the boundary. An answer from the sovereign model replies to a prompt that had to stay inside, and may repeat it in ways the scan does not look for (the semantic detector does not read answers), so only its length and scan are kept, the way a `model_call` keeps no payload hash for a call inside. When a detector fails on an answer, the answer is withheld and not kept either.
+
+An **outcome** body contains what was actually done: the redaction counts and, after a `redact`, which placeholders had their values put back in the answer, which model was called, whether it is inside the boundary, whether it is a stub, which model actually served the answer, the latency, and for external calls the destination, whether the gateway allowed it, and the SHA-256 and length of the payload that was sent. The payload hash is a plain SHA-256 on purpose, so it can be compared with the provider's own logs.
 
 ### Why one record per step
 
@@ -193,7 +197,7 @@ Each record is written *before* the step after it starts, and the outcome *after
 - A request is on record from the moment it arrives, even if it never gets further.
 - The log never claims an egress that did not happen. The outcome is written from the result, not from the plan.
 - The log never misses an egress that did happen. The decision and the `model_call` record, with the payload hash, were already on disk.
-- A crash leaves a request with no outcome, and the verifier reports it as interrupted. Its last record shows how far it got: after `model_call`, a model was being called; before it, none was.
+- A crash leaves a request with no outcome, and the verifier reports it as interrupted. Its last record shows how far it got: after `model_call`, a model was being called; after `model_reply`, its answer was back but not returned; before `model_call`, no model was called.
 - An unexpected error leaves an `error` record naming the step, instead of nothing.
 
 The verifier checks the order: a request starts with `received`, has at most one decision, and ends with exactly one `outcome` or `error`. Logs written before `received` existed start each request with its decision, and still verify.
@@ -215,7 +219,7 @@ The last two rows are the reason for two features. Every API response carries a 
 
 ### Reconstructing a decision from the evidence alone
 
-The verifier ([audit/verify.py](src/control_plane/audit/verify.py)) needs only the log, the public key and the policy snapshots. For each decision record it loads the snapshot named by the recorded SHA-256, checks the snapshot's own hash, rebuilds the signals from the record, runs the same `classify` and `decide` functions the server ran, and compares the result with what was recorded. This works because both functions are pure and because the record holds their complete input. It does not need the original prompt.
+The verifier ([audit/verify.py](src/control_plane/audit/verify.py)) needs only the log, the public key and the policy snapshots. For each decision record it loads the snapshot named by the recorded SHA-256, checks the snapshot's own hash, rebuilds the signals from the request's detection record, runs the same `classify` and `decide` functions the server ran, and compares the result with what was recorded. This works because both functions are pure and because the two records hold their complete input. It does not need the original prompt.
 
 The server refuses to append to a log that fails verification at startup. Appending would bury the damage under valid-looking records.
 
@@ -236,6 +240,7 @@ Each row names the test that proves it. The tests are in [tests/](tests/).
 | Received record cannot be written | 503, nothing inspected | `test_no_received_record_means_nothing_is_inspected` |
 | Decision record cannot be written | 503, no model call | `test_no_decision_record_means_no_model_call` |
 | Model call record cannot be written | 503, no model call | `test_no_model_call_record_means_no_model_call` |
+| Model reply record cannot be written | 503, answer withheld | `test_no_model_reply_record_means_no_answer` |
 | Outcome record cannot be written | 503, answer withheld | `test_no_outcome_record_means_the_answer_is_withheld` |
 | Sovereign model down | Blocked, never sent outside. 503 with a message | `test_sovereign_model_down_blocks_and_never_falls_back_outside` |
 | Destination not on the allowlist | Egress refused and audited | `test_a_destination_missing_from_the_allowlist_is_refused` |
@@ -275,7 +280,7 @@ One deliberate asymmetry: fallback is allowed only in the safe direction. A sove
 | The external model returns sensitive content | Output scan and response redaction | Same detector limits as input. |
 | A bug or dependency sends data out directly | The external provider is reachable only through the gateway object | **Code-level only.** The container still has open internet access. Network-level egress control is the main missing piece. |
 | Someone with write access to the data volume edits the log | Hash chain and signatures | They can truncate the tail unless someone kept a receipt. |
-| Someone who also holds the signing key rewrites the log | Receipts held by callers, and the replay check | A careful insider with the key could fabricate consistent records for requests no caller kept a receipt for. Fixing this needs the key in an HSM and the chain head anchored outside. |
+| Someone who can also sign rewrites the log | Receipts held by callers, and the replay check. On the hosted demo the key is in AWS KMS, so it cannot be copied, and every signing call is in CloudTrail | A careful insider allowed to sign could fabricate consistent records for requests no caller kept a receipt for. Fixing this needs the chain head anchored outside. |
 | Someone reads the audit log | It holds keyed hashes, and the prompt only with private values masked | The rest of the prompt is readable, including anything the detectors missed. Metadata is visible too: when requests happened, what kind of data they held, how long the prompt was. |
 | The clock is wrong or changed | Order comes from `seq` and the chain, not from timestamps | Timestamps are not trusted time. |
 
@@ -294,8 +299,8 @@ These are the gaps I know about. None of them is hidden by the evidence.
 - **The masked prompt shows what the detectors missed.** A name Presidio did not recognise, or a value scored below the policy's `min_score`, stays readable in the `detection` record, and the log cannot forget it. Keeping the full prompt would need a separate store: encrypted, with every read recorded, and a retention period after which each prompt's key is deleted. That is the next step if investigators need the exact text.
 - **The Alerts tab reads the whole audit log on every refresh.** That is fine at this scale; a large deployment would keep metrics in a store.
 - **One writer.** The audit log assumes a single process. Several instances would need a shared sequencer.
-- **Keys are files on the data volume.**
-- **The external call was not exercised against the live Anthropic API in this submission**, because no API key was available on the build machine. It is covered by tests with a fake client, and the stub path is what the sample run shows.
+- **Run locally, the keys are files on the data volume.** The hosted demo signs in AWS KMS instead, with an Ed25519 key that never leaves it, and keeps the other secrets in AWS Secrets Manager. Each record costs one KMS call, made while the log holds its write lock, which caps how many records per second one server can write.
+- **The live Anthropic API was exercised with Claude Haiku 5.5**, on the hosted demo and on a local stack with a key in `.env`. The tests use a fake client. Without a key the external model reports not ready, and prompts the policy lets out are refused. Claude Haiku 5.5 has no server-side refusal fallback, so none is requested, and a refusal is returned as one.
 - **Model answers are not deterministic.** Determinism is claimed for the enforcement decision and for what is sent, not for what a model replies.
 - **Normalization can change meaning.** NFKC folds look-alike characters, which is what stops evasion, but it also turns `x²` into `x2`. The model receives the normalized text.
 - **An internal error returns HTTP 500 and sends nothing.** It is recorded as an `error` record naming the step that failed, and the response carries the audit ID. Only the exception class is recorded, so finding the cause needs the server log, which has the stack trace without the message. A process that dies outright leaves its request without an outcome, which the verifier reports as interrupted. An unexpected error raised by a model provider is handled differently: it is recorded as a failed, attempted call.

@@ -22,6 +22,7 @@ from control_plane.audit.keys import (
     load_public_key,
 )
 from control_plane.audit.log import AuditLog, AuditWriteError
+from control_plane.audit.signing import LocalSigner
 from control_plane.audit.verify import Report, verify_log
 from control_plane.detection.base import Detector, DetectorRunner
 from control_plane.detection.rules import RuleDetector
@@ -183,6 +184,7 @@ def make_harness(tmp_path: Path) -> HarnessFactory:
         *,
         policy_text: str | None = None,
         detectors: Sequence[Detector] | None = None,
+        semantic: Detector | None = None,
         sovereign: FakeProvider | None = None,
         external: FakeProvider | None = None,
         detection_timeout_s: float = 5.0,
@@ -194,14 +196,17 @@ def make_harness(tmp_path: Path) -> HarnessFactory:
         )
         key_dir = data_dir / "keys"
         audit = FlakyAuditLog(
-            data_dir / "audit" / "audit.jsonl", load_or_create_signing_key(key_dir)
+            data_dir / "audit" / "audit.jsonl", LocalSigner(load_or_create_signing_key(key_dir))
         )
         sovereign = sovereign or FakeProvider("ollama", in_boundary=True)
         external = external or FakeProvider("anthropic", in_boundary=False)
         detectors = detectors if detectors is not None else [RuleDetector(), KeywordDetector()]
         policies = PolicyStore(policy_path, data_dir / "policies")
         egress = EgressGateway(external)
-        runner = DetectorRunner(detectors, detection_timeout_s)
+        # As in production, the semantic detector reads the prompt with values masked.
+        runner = DetectorRunner(
+            detectors, detection_timeout_s, masked_text_detectors=[semantic] if semantic else []
+        )
         plane = ControlPlane(
             detectors=runner,
             policies=policies,

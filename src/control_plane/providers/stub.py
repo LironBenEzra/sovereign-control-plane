@@ -1,4 +1,4 @@
-"""A stand-in model for running without Ollama or an API key.
+"""A stand-in for the sovereign model, for running without Ollama.
 
 It makes no network call and says so: `is_stub` is true and the provider name starts
 with `stub-`, and both are written to the audit record. Evidence must never claim a

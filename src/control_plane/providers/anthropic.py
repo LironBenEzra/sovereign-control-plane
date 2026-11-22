@@ -32,12 +32,17 @@ class AnthropicProvider:
     ) -> None:
         self.model = model
         self._refusal_fallback = refusal_fallback
-        # With no key given, the SDK resolves credentials from the environment itself.
+        # Without a key there is no external model: it reports not ready and every call
+        # fails closed before anything is sent. "" stops the SDK reading the environment
+        # itself, so the key in the settings is the only one used.
+        self._has_key = client is not None or bool(api_key)
         self._client = client or anthropic.Anthropic(
-            api_key=api_key, timeout=timeout_s, max_retries=2
+            api_key=api_key or "", timeout=timeout_s, max_retries=2
         )
 
     def generate(self, prompt: str) -> ModelReply:
+        if not self._has_key:
+            raise ProviderError("no_api_key")
         try:
             response = self._create(prompt)
         except anthropic.APIConnectionError as exc:  # includes timeouts
@@ -77,5 +82,7 @@ class AnthropicProvider:
         )
 
     def status(self) -> ProviderStatus:
+        if not self._has_key:
+            return ProviderStatus(ready=False, detail="No ANTHROPIC_API_KEY is set")
         # No probe call: a health check must not send anything outside the boundary.
         return ProviderStatus(ready=True, detail=f"configured for {self.model}, not probed")

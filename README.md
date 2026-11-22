@@ -5,7 +5,7 @@ A control plane that sits in front of AI models and enforces policy on private d
 ![System design](docs/architecture.png)
 
 - **[DESIGN.md](DESIGN.md)** explains the system design, the trust boundary, the threat model and the reasoning behind each decision.
-- **[docs/sample-run.md](docs/sample-run.md)** is a captured run: six requests, each with its enforcement outcome and audit evidence.
+- **[docs/sample-run.md](docs/sample-run.md)** is a captured run: eight requests, each with its enforcement outcome and audit evidence, then live faults.
 - **[docs/architecture.excalidraw](docs/architecture.excalidraw)** is the editable diagram.
 - **[docs/PLAN.md](docs/PLAN.md)** is the development plan the project was built from, with what changed along the way.
 
@@ -29,31 +29,34 @@ The first run builds the image and downloads the model, so it takes a few minute
 
 ### Hosted demo
 
-The same stack runs at **https://sovereign-demo.here**, so it can be tried without installing anything. It is one AWS EC2 instance (`m7i-flex.large`: 2 vCPU, 8 GB, region `eu-north-1`) with Caddy in front for HTTPS; see [deploy/](deploy/). The external model there is the labelled stub: no API key is on the server. With 2 CPUs, everything is slower than on a laptop: a short prompt takes about 6 seconds, or 10 to 40 seconds when the local model answers, depending on how long the answer is. The detection time budget there is 30 seconds, which judges prompts up to about 3,500 characters; a longer one is treated as private.
+The same stack runs at **https://sovereign-demo.here**, so it can be tried without installing anything. It is one AWS EC2 instance (`m7i-flex.large`: 2 vCPU, 8 GB, region `eu-north-1`) with Caddy in front for HTTPS; see [deploy/](deploy/). No secret is on the server: the audit log is signed in AWS KMS with an Ed25519 key that never leaves it (`alias/scp-demo-audit`), and the HMAC key and the admin token are in AWS Secrets Manager (`eu-north-1`, under `scp-demo/`). The control plane uses them with the instance's role, which can sign with that key, read those secrets, and nothing else. The external model there is Claude Haiku 5.5 (`claude-haiku-5-5`), the smallest Claude model, with its API key in Secrets Manager as `scp-demo/anthropic-api-key`. With 2 CPUs, everything is slower than on a laptop: a short prompt takes about 6 seconds, or 10 to 40 seconds when the local model answers, depending on how long the answer is. The detection time budget there is 30 seconds, which judges prompts up to about 3,500 characters; a longer one is treated as private.
 
-To run your own copy: `AWS_PROFILE=<profile> deploy/ec2.sh create`, then `deploy/ec2.sh deploy` (run it again after any change). It is served at `<public-ip>.sslip.io`, and also at any domain you list in `deploy/ec2.env` once its DNS A record points to the instance. `deploy/ec2.sh stop` stops the instance between uses and keeps the URL; `deploy/ec2.sh destroy` deletes everything `create` made.
+To run your own copy: `AWS_PROFILE=<profile> deploy/ec2.sh create`, then `deploy/ec2.sh deploy` (run it again after any change). The first deploy creates the instance role and the secrets. The admin token for saving policy changes (trying a draft needs none) is then read with `aws secretsmanager get-secret-value --secret-id scp-demo/admin-token --query SecretString --output text`. It is served at `<public-ip>.sslip.io`, and also at any domain you list in `deploy/ec2.env` once its DNS A record points to the instance. `deploy/ec2.sh stop` stops the instance between uses and keeps the URL; `deploy/ec2.sh destroy` deletes everything `create` made.
 
 ### API keys and environment variables
 
-No key is needed. Without one, the external model is a stub, and every audit record says so (`"stub": true`).
-
-To use the real Anthropic API as the external model, copy `.env.example` to `.env` and set the key:
+The external model is Anthropic's Claude API, so set an API key. Copy `.env.example` to `.env` and set the key:
 
 ```bash
 cp .env.example .env
 # then edit .env:  ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+Without a key the external model reports not ready: prompts the policy lets out are refused with HTTP 503, and the audit records say why. Prompts that stay inside still work.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | empty | Enables the real external model. |
-| `SCP_EXTERNAL_MODEL` | `claude-opus-5-5` | External model id. |
+| `ANTHROPIC_API_KEY` | empty | The key for the external model. Without it, nothing leaves the boundary. |
+| `SCP_EXTERNAL_MODEL` | `claude-haiku-5-5` | External model id. The default is the smallest Claude model. |
+| `SCP_ADMIN_TOKEN` | empty | Needed to save policy changes, unless open editing is on. |
+| `SCP_OPEN_POLICY_EDITING` | `false` | A demo setting: anyone may save the policy or put the original back, with no token, and each change is signed as `visitor`. The hosted demo turns it on. |
+| `SCP_EXTERNAL_REFUSAL_FALLBACK` | `false` | Ask Anthropic to re-run a declined request on a fallback model. Claude Haiku 5.5 has none; turn it on only with a model that does, such as `claude-opus-5-5`. |
 | `SCP_SOVEREIGN_MODEL` | `llama3.2:3b` | Any model Ollama can pull. It also runs the semantic detector, so measure a replacement with `make eval-semantic`. |
 | `SCP_SOVEREIGN_PROVIDER` | `ollama` | Set to `stub` to run without Ollama. This also turns the semantic detector off, and every audit record shows it did not run. |
 
 ### Try it
 
-**In the browser.** The Playground tab has thirteen sample prompts. Each result shows the four steps: what was found and why, which rule matched, exactly what the model received, and the audit receipt. The Alerts tab lists what needs an admin's attention, now and over a chosen period: a broken policy, a failing detector or model, requests no rule matched, blocked injections and secrets, withheld answers and detection timeouts, with policy changes and traffic metrics below. Each entry opens its records in the Audit log. The Audit log tab lists one row per request, filtered by decision, rule or category: opening it shows its full audit ID and each step it recorded, and opening a step shows its signed record in place. It has a "Verify chain" button. The Policy tab shows the active rules.
+**In the browser.** The Playground tab has thirteen sample prompts. Each result shows the four steps: what was found and why, which rule matched, exactly what the model received, and the audit receipt. The Alerts tab lists what needs an admin's attention, now and over a chosen period: a broken policy, a failing detector or model, requests no rule matched, blocked injections and secrets, withheld answers and detection timeouts, with policy changes and traffic metrics below. Each entry opens its records in the Audit log. The Audit log tab lists one row per request, filtered by decision, rule or category: opening it shows its full audit ID and each step it recorded, and opening a step shows its signed record in place. It has a "Verify chain" button. The Policy tab shows the active rules. Anyone can edit a draft there and try it on prompts, next to the policy in force, with nothing saved or sent to any model. Saving needs the admin token, except on the hosted demo, where anyone can save and "Back to the original policy" always puts the shipped one back.
 
 | Playground: a prompt with contact PII is redacted | Audit log: one row per request, opened to show each step and its signed record |
 |---|---|
@@ -81,7 +84,7 @@ The real response to that command, with hashes shortened and a few fields left o
 
 ```json
 {
-  "audit_id": "159207a76e1346678afb4702fb3b21e6",
+  "audit_id": "01a6b567ab8c4bdf973f4cb6ca62dd40",
   "decision": {
     "action": "redact",
     "rule_id": "redact-pii",
@@ -115,42 +118,42 @@ The real response to that command, with hashes shortened and a few fields left o
   },
   "policy": {
     "id": "default-sovereign-policy",
-    "version": "1.0.0",
-    "sha256": "ba46e14e428eff1a..."
+    "version": "1.2.1",
+    "sha256": "05115c3c9c8af107..."
   },
   "outcome": "completed",
   "model": {
-    "provider": "stub-external",
-    "model": "stub-echo",
+    "provider": "anthropic",
+    "model": "claude-haiku-5-5",
     "in_boundary": false,
-    "stub": true
+    "stub": false
   },
   "forwarded_prompt": "Write a short reply to <PERSON_1> at <EMAIL_ADDRESS_1>.",
-  "model_reply": "[stub-external: no real model was called] I received: Write a short reply to <PERSON_1> at <EMAIL_ADDRESS_1>.",
-  "response": "[stub-external: no real model was called] I received: Write a short reply to Dana Levi at dana.levi@example.com.",
+  "model_reply": "Here's a short reply template you can adjust:\n\n**To:** <EMAIL_ADDRESS_1>\n**Subject:** Re: [Original Subject]\n\nHi <PERSON_1>,\n\nThanks for your message. I've received it and will get back to you with a full response by [day/date]. Please let me know if anything is urgent in the meantime.\n\nBest regards,\n[Your Name]\n\nIf you share the original email's content, I can write a reply that addresses its specific points.",
+  "response": "Here's a short reply template you can adjust:\n\n**To:** dana.levi@example.com\n**Subject:** Re: [Original Subject]\n\nHi Dana Levi,\n\nThanks for your message. I've received it and will get back to you with a full response by [day/date]. Please let me know if anything is urgent in the meantime.\n\nBest regards,\n[Your Name]\n\nIf you share the original email's content, I can write a reply that addresses its specific points.",
   "receipts": {
     "decision": {
-      "seq": 26,
-      "hash": "85fa02eaf101a29e...",
-      "key_id": "ed25519:91a2fa3c6452f577"
+      "seq": 39,
+      "hash": "bc7beb56e1dfda57...",
+      "key_id": "ed25519:c79bc55672001e74"
     },
     "outcome": {
-      "seq": 27,
-      "hash": "bde2fe53aaa99edb...",
-      "key_id": "ed25519:91a2fa3c6452f577"
+      "seq": 41,
+      "hash": "080068478bf2e510...",
+      "key_id": "ed25519:c79bc55672001e74"
     }
   }
 }
 ```
 
-`forwarded_prompt` is exactly what left the boundary. `model_reply` is what the model sent back, still in placeholders (after the output scan, which removes any secrets). `response` is what the caller gets back, with the placeholders restored inside the boundary. (The external model here is the stub, which echoes what it received.)
+`forwarded_prompt` is exactly what left the boundary. `model_reply` is what the model sent back, still in placeholders (after the output scan, which removes any secrets). `response` is what the caller gets back, with the placeholders restored inside the boundary.
 
 ### Change the policy
 
-Rules live in one file, [policy/policy.yaml](policy/policy.yaml), mounted into the container. It is re-read on every request, so an edit takes effect immediately with no restart. Two edits worth trying:
+The shipped rules are [policy/policy.yaml](policy/policy.yaml). On first start they are copied into the data volume as a snapshot named by its SHA-256. From then on the policy in force is changed in the Policy tab, or with `PUT /v1/policy` and the admin token, and takes effect on the next request with no restart; "Back to the original policy" (`POST /v1/policy/restore-default`) puts the shipped file back. Two changes worth trying (both are in [docs/sample-run.md](docs/sample-run.md) §4):
 
-- Remove `stub-external` (or `anthropic`) from `egress.allowed_destinations`. Clean prompts are now refused at the egress gateway, and the refusal is audited.
-- Break the file (delete the `rules:` line). Every request is blocked until it is fixed.
+- Remove `anthropic` from `egress.allowed_destinations`. Clean prompts are now refused at the egress gateway, and the refusal is audited.
+- Edit the snapshot in force on disk (`data/policies/<sha256>.yaml`). Its hash no longer matches, and every request is blocked until the policy is restored.
 
 Each change of policy is recorded in the audit log, and `make verify` still replays every earlier decision against the policy version it was made under.
 
@@ -211,11 +214,11 @@ The default policy:
 | Detecting secrets | My own **pattern rules** and an entropy check | Presidio does not cover credentials. A second detector that shares no code with the first also means one failing cannot hide the other's findings. |
 | Detecting confidential business content and prompt injection | The **local model** itself, asked two questions, each with a fixed few-shot prompt and an answer limited by a JSON schema | Patterns and NER find values (a key, a name), not meaning or intent, so they miss meeting notes, an unannounced launch, or orders hidden in a pasted email. It runs inside the boundary for the same reason as Presidio. On 48 labelled prompts it caught 17 of 18 confidential ones and 9 of 9 injections. |
 | Sovereign model | **Ollama** serving `llama3.2:3b` | A real model running inside the boundary, small enough to pull and run on a reviewer's laptop CPU. The same model runs the semantic detector, so there is one model to download and keep in memory. `llama3.2:1b` answered about twice as fast but was too weak as a detector (13 of 16 confidential prompts caught, against 15). The model is one environment variable. |
-| External model | **Anthropic Claude API** (`claude-opus-5-5`), or a labelled stub | A real external destination makes "egress only when policy allows" concrete. The stub lets the system run with no key and never pretends to be a real model. |
+| External model | **Anthropic Claude API** (`claude-haiku-5-5`, the smallest Claude model) | A real external destination makes "egress only when policy allows" concrete. |
 | UI design | Lenovo's brand palette and **Montserrat**, Lenovo's typeface for web applications ([Lenovo Brand World](https://brandworld.lenovo.com/visual-identity/)) | The UI is built for a Lenovo review, so it speaks Lenovo's visual language: purple for inside the boundary, deep blue for outside, signature red only for the brand and for stop states. The font is bundled with the app, so the browser makes no third-party request. Lenovo's logo is not used, and the app is not presented as a Lenovo product. |
 | Writing the code | **Claude Code** (AI coding assistant) | Used to write the code, tests and the first draft of these documents, from the design decisions recorded in DESIGN.md. |
 
-The semantic detector puts an LLM in the decision path, which I first left out: its answer comes from a model, and the prompt it judges can argue with it. Four things keep that safe. It can only **add** findings, so a prompt that talks it into answering "none" or "not an injection" still gets the full protection of the other two detectors. It runs with temperature 0 and a fixed seed, and Ollama limits its answer to the list of categories. It records only the category and the span, never a reason that could quote the text. And the decision is still a pure function of the recorded findings, so `make verify` replays it without calling the model. If the model is down, answers outside the list, or cannot judge the prompt within the detection time budget, the prompt is treated as private, as with any detector failure. Details are in [DESIGN.md, section 4](DESIGN.md#4-detection).
+The semantic detector puts an LLM in the decision path, which I first left out: its answer comes from a model, and the prompt it judges can argue with it. Five things keep that safe. It reads the prompt only **after** the values the other two detectors found are masked, and not at all if either of them fails, so it never sees a key or a name. It can only **add** findings, so a prompt that talks it into answering "none" or "not an injection" still gets the full protection of the other two detectors. It runs with temperature 0 and a fixed seed, and Ollama limits its answer to the list of categories. It records only the category and the span, never a reason that could quote the text. And the decision is still a pure function of the recorded findings, so `make verify` replays it without calling the model. If the model is down, answers outside the list, or cannot judge the prompt within the detection time budget, the prompt is treated as private, as with any detector failure. Details are in [DESIGN.md, section 4](DESIGN.md#4-detection).
 
 ## Design decisions and trade-offs
 
@@ -223,7 +226,7 @@ The full reasoning is in [DESIGN.md](DESIGN.md). The short version:
 
 | Decision | What I gave up |
 |---|---|
-| **One audit record per step**: received, detection, decision, model call, then outcome or error. Each is written before the next step starts. | Up to five fsynced records per request instead of two. In return, a request is on record from the moment it arrives, the log cannot claim an egress that did not happen or miss one that did, and a crash or an error shows the step where it happened. |
+| **One audit record per step**: received, detection, decision, model call, model reply, then outcome or error. Each is written before the next step starts. | Up to six fsynced records per request instead of two. In return, a request is on record from the moment it arrives, the log cannot claim an egress that did not happen or miss one that did, and a crash or an error shows the step where it happened. |
 | **Hash chain plus Ed25519 signatures plus receipts.** | A chain alone cannot see truncation of its tail. Receipts cover that only if a caller keeps them. |
 | **The audit log never stores a private value.** The prompt is kept as a keyed hash, and in the `detection` record with every value the policy counts as private masked: the same text a `redact` decision sends. | A reviewer sees what was asked, but not the private values in it. Anything the detectors missed is readable in the masked prompt. |
 | **The verifier replays every decision** from the recorded signals and the policy snapshot. | The policy functions must stay pure, and the record must hold their complete input. |
@@ -242,10 +245,10 @@ The full reasoning is in [DESIGN.md](DESIGN.md). The short version:
 In the order I would do them:
 
 1. **Network-level egress control.** Put the control plane on an internal network whose only route out is an egress proxy with a destination allowlist, so a bug or a compromised dependency cannot send data out.
-2. **Anchor the chain head outside the boundary** (a transparency log, an RFC 3161 timestamp, or write-once storage), and move the signing key into an HSM or KMS. Today, an insider who holds the key could rewrite records that no caller kept a receipt for.
+2. **Anchor the chain head outside the boundary** (a transparency log, an RFC 3161 timestamp, or write-once storage). The hosted demo signs in AWS KMS, so no one holds the private key, but anyone allowed to sign with it could still sign a rewritten log that no caller kept a receipt for. KMS records each of those signing calls in CloudTrail.
 3. **Authenticate callers** (mTLS or signed tokens) and put the audit endpoints behind a separate auditor role.
 4. **Recognizers for addresses and for languages other than English**, and a semantic detector prompt tested on languages other than English.
-5. **A larger evaluation set for every detector**, with precision and recall tracked per entity type, so policy thresholds are chosen from data. Today only the semantic detector has one, of 48 prompts (`make eval-semantic`), written by the same team that wrote its prompts.
+5. **A larger evaluation set for every detector**, with precision and recall tracked per entity type, so policy thresholds are chosen from data. Today only the semantic detector has one, of 48 prompts (`make eval-semantic`), written by the same team that wrote its prompts. `make eval-judge` adds Claude as an independent judge of every prompt, and labels prompts nobody has labelled by hand (`--extra`), so the set can grow.
 6. **Streaming responses**, with the output scan applied to the stream.
 7. **A multi-instance audit writer** backed by a database with an append-only table.
 
@@ -256,9 +259,10 @@ Known gaps are listed in [DESIGN.md, section 10](DESIGN.md#10-known-limitations)
 ```bash
 make install     # create .venv, install dependencies and the spaCy model
 make check       # ruff + pyright + pytest
-make dev         # run the API locally with stub models on :8000 (no Docker)
+make dev         # run the API locally on :8000 with a stub local model (no Docker or Ollama)
 make ui          # build the web UI into ui/dist
 make eval-semantic  # measure the semantic detector on 48 labelled prompts (in the Docker stack)
+make eval-judge     # the same, with Claude labelling every prompt as an LLM judge (needs ANTHROPIC_API_KEY)
 ```
 
 ```

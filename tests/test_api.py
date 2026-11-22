@@ -26,7 +26,7 @@ MAX_PROMPT_CHARS = 200
 ADMIN_TOKEN = "test-admin-token-0123456789"
 ADMIN = {"authorization": f"Bearer {ADMIN_TOKEN}"}
 # The records of one request that was answered by a model.
-LIFECYCLE = ["received", "detection", "decision", "model_call", "outcome"]
+LIFECYCLE = ["received", "detection", "decision", "model_call", "model_reply", "outcome"]
 
 
 @pytest.fixture
@@ -40,7 +40,10 @@ def client(harness: Harness, tmp_path: Path) -> TestClient:
 
 
 def make_client(
-    harness: Harness, tmp_path: Path, admin_token: str | None = ADMIN_TOKEN
+    harness: Harness,
+    tmp_path: Path,
+    admin_token: str | None = ADMIN_TOKEN,
+    open_editing: bool = False,
 ) -> TestClient:
     settings = Settings(
         _env_file=None,  # type: ignore[call-arg]
@@ -49,6 +52,7 @@ def make_client(
         ui_dir=tmp_path / "no-ui",
         max_prompt_chars=MAX_PROMPT_CHARS,
         admin_token=admin_token,
+        open_policy_editing=open_editing,
     )
     services = Services(
         settings=settings,
@@ -79,8 +83,8 @@ def test_a_clean_prompt_returns_the_decision_the_answer_and_receipts(client: Tes
     }
     assert body["response"] == "echo: What is a hash chain?"
     assert set(body["receipts"]) == {"decision", "outcome"}
-    # The model_call record sits between them.
-    assert body["receipts"]["outcome"]["seq"] == body["receipts"]["decision"]["seq"] + 2
+    # The model_call and model_reply records sit between them.
+    assert body["receipts"]["outcome"]["seq"] == body["receipts"]["decision"]["seq"] + 3
 
 
 def test_findings_are_explained_in_the_response(client: TestClient) -> None:
@@ -210,8 +214,8 @@ def test_audit_endpoints_expose_the_evidence(client: TestClient) -> None:
     client.post("/v1/inference", json={"prompt": "two"})
 
     listing = client.get("/v1/audit", params={"limit": 2}).json()
-    assert listing["total"] == 11  # policy_loaded + 2 x 5 steps
-    assert [r["seq"] for r in listing["records"]] == [10, 9]
+    assert listing["total"] == 13  # policy_loaded + 2 x 6 steps
+    assert [r["seq"] for r in listing["records"]] == [12, 11]
 
     detail = client.get(f"/v1/audit/{first['audit_id']}").json()
     assert [r["event"] for r in detail["records"]] == LIFECYCLE
@@ -255,7 +259,7 @@ def test_audit_requests_page_by_request_and_never_split_one(client: TestClient) 
             break
 
     assert len(seen) == 4  # three requests and the policy load
-    assert sorted(r["seq"] for e in seen for r in e["records"]) == list(range(16))
+    assert sorted(r["seq"] for e in seen for r in e["records"]) == list(range(19))
     assert all(
         [r["event"] for r in e["records"]] == LIFECYCLE for e in seen if e["audit_id"] != "system"
     )
@@ -310,7 +314,7 @@ def test_audit_search_finds_one_request_by_its_id_or_the_start_of_it(
 
     for query in (first["audit_id"], first["audit_id"][:8].upper()):
         found = client.get("/v1/audit", params={"audit_id": query}).json()
-        assert found["total"] == 5
+        assert found["total"] == len(LIFECYCLE)
         assert {r["audit_id"] for r in found["records"]} == {first["audit_id"]}
         assert [r["event"] for r in found["records"]] == LIFECYCLE[::-1]
 
@@ -326,7 +330,7 @@ def test_verify_endpoint_reports_an_intact_chain(client: TestClient) -> None:
     report = client.get("/v1/audit/verify").json()
 
     assert report["ok"] is True
-    assert (report["records"], report["decisions_replayed"]) == (6, 1)
+    assert (report["records"], report["decisions_replayed"]) == (7, 1)
 
 
 def test_verify_endpoint_reports_tampering(client: TestClient, harness: Harness) -> None:
@@ -442,10 +446,6 @@ def test_changing_the_policy_needs_the_admin_token(harness: Harness, tmp_path: P
             "/v1/policy/restore-default", json={"base_sha256": base}, headers=headers
         )
         assert restore.status_code == 401
-        preview = client.post(
-            "/v1/policy/preview", json={"document": draft, "prompt": "hi"}, headers=headers
-        )
-        assert preview.status_code == 401
     assert harness.records("policy_changed") == []
     assert client.post("/v1/inference", json={"prompt": "hi"}).json()["decision"]["action"] == (
         "allow"
@@ -478,6 +478,49 @@ def test_a_saved_policy_is_in_force_audited_and_in_the_history(
     assert entry["changed_by"].startswith("admin-token:")
     assert ADMIN_TOKEN not in harness.log_text()
     assert client.get("/v1/audit/verify").json()["ok"] is True
+
+
+def test_with_open_editing_anyone_changes_the_policy_as_a_visitor(
+    harness: Harness, tmp_path: Path
+) -> None:
+    client = make_client(harness, tmp_path, admin_token=None, open_editing=True)
+    info = client.get("/v1/policy").json()
+    assert (info["editable"], info["open_editing"]) == (True, True)
+
+    saved = client.put(
+        "/v1/policy",
+        json={"document": stricter_draft(client), "base_sha256": info["base_sha256"], "note": "x"},
+    )
+    assert saved.status_code == 200
+    assert client.get("/v1/policy").json()["history"][0]["changed_by"] == "visitor"
+
+    # Anyone can also go back to the original policy.
+    base = client.get("/v1/policy").json()["base_sha256"]
+    restored = client.post("/v1/policy/restore-default", json={"base_sha256": base})
+    assert restored.status_code == 200
+    after = client.get("/v1/policy").json()
+    assert after["is_default"] is True
+    assert after["history"][0]["changed_by"] == "visitor"
+    assert client.get("/v1/audit/verify").json()["ok"] is True
+
+
+def test_open_editing_still_names_the_admin_and_refuses_a_wrong_token(
+    harness: Harness, tmp_path: Path
+) -> None:
+    client = make_client(harness, tmp_path, open_editing=True)
+    draft = stricter_draft(client)
+    base = client.get("/v1/policy").json()["base_sha256"]
+    save = {"document": draft, "base_sha256": base, "note": "x"}
+
+    wrong = client.put("/v1/policy", json=save, headers={"authorization": "Bearer wrong"})
+    assert wrong.status_code == 401
+
+    assert client.put("/v1/policy", json=save, headers=ADMIN).status_code == 200
+    assert client.get("/v1/policy").json()["history"][0]["changed_by"].startswith("admin-token:")
+
+
+def test_without_open_editing_the_policy_reports_it_is_closed(client: TestClient) -> None:
+    assert client.get("/v1/policy").json()["open_editing"] is False
 
 
 def test_an_invalid_draft_is_refused_and_says_which_field_is_wrong(
@@ -523,16 +566,18 @@ def test_a_save_from_an_out_of_date_version_is_refused(client: TestClient) -> No
     assert "Reload" in second.json()["detail"]
 
 
-def test_a_preview_compares_the_draft_with_the_policy_in_force(
-    client: TestClient, harness: Harness
+@pytest.mark.parametrize("admin_token", [ADMIN_TOKEN, None])
+def test_anyone_can_preview_a_draft_without_changing_anything(
+    harness: Harness, tmp_path: Path, admin_token: str | None
 ) -> None:
+    # No token is sent, and with None the server has no token at all: trying a draft is
+    # open to anyone, while saving it is not.
+    client = make_client(harness, tmp_path, admin_token=admin_token)
     draft = stricter_draft(client)
     recorded = len(harness.records())
 
     preview = client.post(
-        "/v1/policy/preview",
-        json={"document": draft, "prompt": "What is a hash chain?"},
-        headers=ADMIN,
+        "/v1/policy/preview", json={"document": draft, "prompt": "What is a hash chain?"}
     ).json()
 
     assert (preview["current"]["action"], preview["draft"]["action"]) == (
@@ -542,6 +587,16 @@ def test_a_preview_compares_the_draft_with_the_policy_in_force(
     assert preview["changed"] is True
     assert len(harness.records()) == recorded
     assert harness.external.prompts == harness.sovereign.prompts == []
+    assert client.get("/v1/policy").json()["is_default"] is True
+
+
+def test_a_preview_still_refuses_an_oversized_prompt(client: TestClient) -> None:
+    draft = stricter_draft(client)
+    too_long = "x" * (MAX_PROMPT_CHARS + 1)
+
+    preview = client.post("/v1/policy/preview", json={"document": draft, "prompt": too_long})
+
+    assert preview.status_code == 413
 
 
 def test_an_oversized_policy_body_is_refused(client: TestClient) -> None:
@@ -598,7 +653,6 @@ def test_a_missing_ner_model_starts_degraded_and_never_answers(tmp_path: Path) -
         ui_dir=tmp_path / "no-ui",
         spacy_model="not_an_installed_model",
         sovereign_provider="stub",
-        external_provider="stub",
     )
     client = TestClient(create_app(build_services(settings)))
 
@@ -611,6 +665,30 @@ def test_a_missing_ner_model_starts_degraded_and_never_answers(tmp_path: Path) -
     assert response.status_code == 503
     assert response.json()["decision"]["fail_closed"] is True
     assert response.json()["outcome"] == "withheld"
+
+
+def test_without_an_api_key_the_external_model_is_anthropic_and_not_ready(
+    tmp_path: Path,
+) -> None:
+    # There is no stand-in outside the boundary: without a key, nothing can leave.
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        data_dir=tmp_path / "data",
+        policy_path=DEFAULT_POLICY_PATH,
+        ui_dir=tmp_path / "no-ui",
+        spacy_model="not_an_installed_model",
+        sovereign_provider="stub",
+        anthropic_api_key=None,
+    )
+    client = TestClient(create_app(build_services(settings)))
+
+    assert client.get("/healthz").json()["external_model"] == {
+        "provider": "anthropic",
+        "model": "claude-haiku-5-5",
+        "stub": False,
+        "ready": False,
+        "detail": "No ANTHROPIC_API_KEY is set",
+    }
 
 
 def test_client_id_header_is_recorded_only_when_well_formed(

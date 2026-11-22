@@ -134,8 +134,10 @@ export interface PolicyInfo {
   error: string | null;
   // The version a save must start from. Set even while the policy is broken.
   base_sha256: string | null;
-  // False when the server has no admin token: the policy is read-only.
+  // False when nobody can save here: no admin token, and editing is not open.
   editable: boolean;
+  // Anyone may save, without a token (a demo setting).
+  open_editing: boolean;
   is_default: boolean;
   catalog: {
     // Entity type -> the detectors that can find it.

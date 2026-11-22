@@ -23,7 +23,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN mkdir -p src/control_plane \
     && touch src/control_plane/__init__.py \
-    && pip install . \
+    && pip install ".[aws]" \
     && pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl
 
 COPY src ./src

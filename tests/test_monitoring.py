@@ -161,7 +161,7 @@ def test_rules_that_never_matched_are_listed_only_with_enough_decisions(
 
 def test_security_events_name_the_client(make_harness: HarnessFactory) -> None:
     semantic = KeywordDetector({INJECTION: ("PROMPT_INJECTION", 0.7)}, name="semantic")
-    harness = make_harness(detectors=[RuleDetector(), KeywordDetector(), semantic])
+    harness = make_harness(semantic=semantic)
 
     harness.plane.handle(SECRET, client_id="ci-bot")
     harness.plane.handle(INJECTION, client_id="web-ui")
@@ -214,7 +214,7 @@ def test_detection_failures_name_the_detector_and_the_error(
     make_harness: HarnessFactory,
 ) -> None:
     broken = KeywordDetector({}, name="semantic", error=TimeoutError())
-    harness = make_harness(detectors=[RuleDetector(), KeywordDetector(), broken])
+    harness = make_harness(semantic=broken)
 
     harness.plane.handle(CLEAN)
 
@@ -337,7 +337,7 @@ def test_live_alerts_for_a_broken_system() -> None:
         policy_error="invalid policy: 1 validation error",
         failing_detectors={"semantic": "TimeoutError"},
         sovereign=model(ready=False),
-        external=model(stub=True),
+        external=model(ready=False),
         verification=Report(chain_problems=[Problem(3, "content does not match its hash")]),
     )
 
@@ -346,11 +346,11 @@ def test_live_alerts_for_a_broken_system() -> None:
         "policy_invalid",
         "detector_failing:semantic",
         "local_model_down",
-        "external_model_stub",
+        "external_model_down",
         "audit_verification_failed",
     }
-    assert by_id["external_model_stub"].severity is Severity.INFO
-    assert {a.severity for a in alerts if a.id != "external_model_stub"} == {Severity.CRITICAL}
+    assert by_id["external_model_down"].severity is Severity.WARNING
+    assert {a.severity for a in alerts if a.id != "external_model_down"} == {Severity.CRITICAL}
     assert "SCP_DETECTION_TIMEOUT_S" in by_id["detector_failing:semantic"].action
     assert "Record 3" in by_id["audit_verification_failed"].detail
 

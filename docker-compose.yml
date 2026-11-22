@@ -16,13 +16,17 @@ services:
       SCP_OLLAMA_URL: http://ollama:11434
       # Answers prompts that stay inside, and also runs the semantic detector.
       SCP_SOVEREIGN_MODEL: ${SCP_SOVEREIGN_MODEL:-llama3.2:3b}
-      SCP_EXTERNAL_PROVIDER: ${SCP_EXTERNAL_PROVIDER:-auto}
-      SCP_EXTERNAL_MODEL: ${SCP_EXTERNAL_MODEL:-claude-opus-5-5}
-      # Optional. Put it in a .env file next to this one. Without a key the external
-      # model is a stub that is labelled as a stub in every audit record.
+      SCP_EXTERNAL_MODEL: ${SCP_EXTERNAL_MODEL:-claude-haiku-5-5}
+      # Haiku has no server-side refusal fallback; set true only with a model that has one.
+      SCP_EXTERNAL_REFUSAL_FALLBACK: ${SCP_EXTERNAL_REFUSAL_FALLBACK:-false}
+      # Saving policy changes: an admin token, or open to anyone (a demo setting).
+      SCP_ADMIN_TOKEN: ${SCP_ADMIN_TOKEN:-}
+      SCP_OPEN_POLICY_EDITING: ${SCP_OPEN_POLICY_EDITING:-false}
+      # Put it in a .env file next to this one. Without a key the external model is not
+      # ready: prompts the policy lets out are refused, and prompts that stay inside work.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
-      # Edit policy/policy.yaml on the host: it takes effect on the next request.
+      # The shipped policy: seeds the data volume on first start, and is what a restore puts back.
       - ./policy:/app/policy:ro
       # Audit log, policy snapshots and keys.
       - scp-data:/app/data

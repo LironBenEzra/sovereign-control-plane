@@ -11,15 +11,46 @@ from control_plane.models import Finding
 
 
 @dataclass(frozen=True)
+class MaskedSpan:
+    """Where one placeholder replaced a value: in the original text and in the masked one."""
+
+    start: int
+    end: int
+    masked_start: int
+    masked_end: int
+
+
+@dataclass(frozen=True)
 class Redaction:
     text: str
     # placeholder -> original value. Lives only in memory for the duration of one request.
     placeholders: dict[str, str]
     by_entity: dict[str, int]
+    # Every placeholder in `text`, in order.
+    masked_spans: tuple[MaskedSpan, ...] = ()
 
     @property
     def span_count(self) -> int:
         return sum(self.by_entity.values())
+
+    def original_span(self, start: int, end: int) -> tuple[int, int]:
+        """The span of the original text that `text[start:end]` stands for.
+
+        A span that starts or ends inside a placeholder covers the whole value it replaced.
+        """
+        return self._original(start, is_end=False), self._original(end, is_end=True)
+
+    def _original(self, position: int, *, is_end: bool) -> int:
+        original = position
+        for span in self.masked_spans:
+            # An end right before a placeholder stops before its value; a start there
+            # begins with it.
+            if position < span.masked_start or (is_end and position == span.masked_start):
+                break
+            if position < span.masked_end:
+                return span.end if is_end else span.start
+            original = span.end + position - span.masked_end
+        return original
 
 
 @dataclass(frozen=True)
@@ -39,8 +70,10 @@ def redact(text: str, findings: Sequence[Finding]) -> Redaction:
     by_value: dict[tuple[str, str], str] = {}
     next_index: Counter[str] = Counter()
     by_entity: Counter[str] = Counter()
+    masked_spans: list[MaskedSpan] = []
 
     parts: list[str] = []
+    masked_length = 0
     cursor = 0
     for span in _merge(findings):
         original = text[span.start : span.end]
@@ -50,13 +83,21 @@ def redact(text: str, findings: Sequence[Finding]) -> Redaction:
             placeholder = f"<{span.entity_type}_{next_index[span.entity_type]}>"
             by_value[key] = placeholder
             placeholders[placeholder] = original
+        placeholder = by_value[key]
+        masked_length += span.start - cursor
+        masked_spans.append(
+            MaskedSpan(span.start, span.end, masked_length, masked_length + len(placeholder))
+        )
+        masked_length += len(placeholder)
         parts.append(text[cursor : span.start])
-        parts.append(by_value[key])
+        parts.append(placeholder)
         by_entity[span.entity_type] += 1
         cursor = span.end
     parts.append(text[cursor:])
 
-    return Redaction("".join(parts), placeholders, dict(sorted(by_entity.items())))
+    return Redaction(
+        "".join(parts), placeholders, dict(sorted(by_entity.items())), tuple(masked_spans)
+    )
 
 
 def restore(text: str, placeholders: Mapping[str, str]) -> tuple[str, int]:

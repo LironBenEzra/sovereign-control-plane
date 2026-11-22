@@ -198,7 +198,7 @@ def test_each_change_is_described_in_one_sentence(default_policy: Policy) -> Non
     )
     data["categories"]["pii"].append("LOCATION")
     data["detection"]["min_score"] = 0.5
-    data["egress"]["allowed_destinations"] = ["anthropic"]
+    data["egress"]["allowed_destinations"] = []
 
     changes = describe_changes(default_policy.document, PolicyDocument.model_validate(data))
 
@@ -208,7 +208,7 @@ def test_each_change_is_described_in_one_sentence(default_policy: Policy) -> Non
         "Added rule block-health at position 1: category health, block.",
         "Removed rule redact-pii.",
         "Rule allow-clean: action changed from allow to route_sovereign.",
-        "Allowed destination removed: stub-external.",
+        "Allowed destination removed: anthropic.",
     ]
 
 

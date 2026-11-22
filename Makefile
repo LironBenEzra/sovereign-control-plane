@@ -1,18 +1,19 @@
 PY := .venv/bin/python
 SPACY_MODEL := en_core_web_md
 
-.PHONY: help up down install dev lint format typecheck test check verify demo tamper-demo eval-semantic ui
+.PHONY: help up down install dev lint format typecheck test check verify demo tamper-demo eval-semantic eval-judge ui
 
 help:
 	@echo "make up           run everything in Docker (API + UI + Ollama) on http://localhost:8000"
 	@echo "make down         stop the Docker stack"
 	@echo "make install      create .venv and install the backend for local development"
-	@echo "make dev          run the API locally with stub models (no Docker, no API key)"
+	@echo "make dev          run the API locally with a stub local model (no Docker or Ollama)"
 	@echo "make check        lint + type-check + tests"
 	@echo "make demo         send the sample requests to a running control plane"
 	@echo "make verify       verify the audit log: chain, signatures, replay"
 	@echo "make tamper-demo  edit a copy of the audit log and show the verifier catching it"
 	@echo "make eval-semantic measure the semantic detector on a labelled set, with the real model"
+	@echo "make eval-judge    the same, with Claude as an LLM judge of every prompt (needs ANTHROPIC_API_KEY)"
 	@echo "                  (verify, tamper-demo and eval-semantic run inside the container;"
 	@echo "                   add LOCAL=1 to run them on this machine after 'make dev')"
 
@@ -25,7 +26,7 @@ down:
 install:
 	python3 -m venv .venv
 	$(PY) -m pip install --quiet --upgrade pip
-	$(PY) -m pip install --quiet -e ".[dev]"
+	$(PY) -m pip install --quiet -e ".[dev,aws]"
 	$(PY) -m spacy download $(SPACY_MODEL)
 
 dev:
@@ -68,6 +69,10 @@ tamper-demo:
 
 eval-semantic:
 	$(RUN) scripts/eval_semantic.py
+
+# Sends only the synthetic test prompts to Claude, which labels them as a judge.
+eval-judge:
+	$(RUN) scripts/eval_semantic.py --judge
 
 demo:
 	python3 scripts/demo.py

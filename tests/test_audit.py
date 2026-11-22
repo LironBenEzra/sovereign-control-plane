@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -8,12 +9,13 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from control_plane.audit.chain import GENESIS_HASH, record_digest
-from control_plane.audit.keys import keyed_hash, load_or_create_signing_key, sign_digest
+from control_plane.audit.keys import key_id, keyed_hash, load_or_create_signing_key, sign_digest
 from control_plane.audit.log import AuditIntegrityError, AuditLog
+from control_plane.audit.signing import LocalSigner
 from control_plane.audit.verify import main as verify_main
 from control_plane.audit.verify import parse_lines, receipt_problem, verify_chain
 from control_plane.evidence import signals_from_evidence
-from tests.conftest import EMAIL, PERSON, SSN, HarnessFactory
+from tests.conftest import EMAIL, PERSON, SSN, Harness, HarnessFactory
 
 
 @pytest.fixture
@@ -23,7 +25,7 @@ def key() -> Ed25519PrivateKey:
 
 @pytest.fixture
 def log(tmp_path: Path, key: Ed25519PrivateKey) -> AuditLog:
-    log = AuditLog(tmp_path / "audit.jsonl", key)
+    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
     for i in range(4):
         log.append("note", f"id-{i}", {"n": i})
     return log
@@ -91,6 +93,17 @@ def test_rewriting_the_chain_with_another_key_is_detected(
     assert first_problem(log, key) == (0, "signature is not valid")
 
 
+def test_a_log_signed_by_another_key_names_both_keys(log: AuditLog, key: Ed25519PrivateKey) -> None:
+    # What a server sees when it starts with a new key, for example one moved to AWS KMS.
+    new_key = Ed25519PrivateKey.generate()
+    old_id, new_id = key_id(key.public_key()), key_id(new_key.public_key())
+
+    with pytest.raises(
+        AuditIntegrityError, match=f"record 0: signed by key {old_id}, not by {new_id}"
+    ):
+        AuditLog(log.path, LocalSigner(new_key))
+
+
 def test_deleting_a_record_is_detected(log: AuditLog, key: Ed25519PrivateKey) -> None:
     records = read(log)
     del records[1]
@@ -132,7 +145,7 @@ def test_truncation_passes_the_chain_but_fails_a_kept_receipt(
 def test_a_reopened_log_continues_the_same_chain(
     tmp_path: Path, log: AuditLog, key: Ed25519PrivateKey
 ) -> None:
-    reopened = AuditLog(log.path, key)
+    reopened = AuditLog(log.path, LocalSigner(key))
     reopened.append("note", "later", {})
 
     records = read(reopened)
@@ -147,13 +160,13 @@ def test_a_tampered_log_cannot_be_opened_for_writing(log: AuditLog, key: Ed25519
     rewrite(log, records)
 
     with pytest.raises(AuditIntegrityError, match="record 2"):
-        AuditLog(log.path, key)
+        AuditLog(log.path, LocalSigner(key))
 
 
 def test_a_decision_without_an_outcome_is_reported_as_interrupted(
     tmp_path: Path, key: Ed25519PrivateKey
 ) -> None:
-    log = AuditLog(tmp_path / "audit.jsonl", key)
+    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
     log.append("decision", "done", {})
     log.append("outcome", "done", {})
     log.append("decision", "crashed-mid-flight", {})
@@ -167,15 +180,15 @@ def test_a_decision_without_an_outcome_is_reported_as_interrupted(
 def test_an_outcome_without_a_decision_breaks_verification(
     tmp_path: Path, key: Ed25519PrivateKey
 ) -> None:
-    log = AuditLog(tmp_path / "audit.jsonl", key)
+    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
     log.append("outcome", "orphan", {})
 
     assert first_problem(log, key) == (0, "outcome without a decision")
 
 
 def test_a_request_ends_with_an_outcome_or_an_error(tmp_path: Path, key: Ed25519PrivateKey) -> None:
-    log = AuditLog(tmp_path / "audit.jsonl", key)
-    for event in ("received", "detection", "decision", "model_call", "outcome"):
+    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
+    for event in ("received", "detection", "decision", "model_call", "model_reply", "outcome"):
         log.append(event, "answered", {})
     for event in ("received", "detection", "error"):
         log.append(event, "failed", {})
@@ -194,6 +207,7 @@ def test_a_request_ends_with_an_outcome_or_an_error(tmp_path: Path, key: Ed25519
     [
         (["detection"], "detection without a received record"),
         (["model_call"], "model_call without a received record"),
+        (["model_reply"], "model_reply without a received record"),
         (["error"], "error without a received record"),
         (["received", "received"], "second received for one audit_id"),
         (["received", "decision", "decision"], "second decision for one audit_id"),
@@ -204,7 +218,7 @@ def test_a_request_ends_with_an_outcome_or_an_error(tmp_path: Path, key: Ed25519
 def test_a_request_record_out_of_order_breaks_verification(
     tmp_path: Path, key: Ed25519PrivateKey, events: list[str], problem: str
 ) -> None:
-    log = AuditLog(tmp_path / "audit.jsonl", key)
+    log = AuditLog(tmp_path / "audit.jsonl", LocalSigner(key))
     for event in events:
         log.append(event, "request", {})
 
@@ -259,33 +273,83 @@ def test_every_decision_replays_from_evidence_alone(make_harness: HarnessFactory
     assert report.incomplete == []
 
 
-def test_replay_catches_a_decision_that_does_not_follow_from_its_signals(
-    make_harness: HarnessFactory,
-) -> None:
-    # An insider who holds the signing key rewrites "block" to "allow" and re-signs
-    # everything. The chain verifies, but the action no longer follows from the
-    # recorded signals and policy.
-    harness = make_harness()
-    harness.plane.handle("password = S3cretValue!")
+def resign_log(harness: Harness, edit: Callable[[dict[str, Any]], None]) -> None:
+    """What an insider holding the signing key can do: edit records and re-sign them all."""
     signing_key = load_or_create_signing_key(harness.data_dir / "keys")
     records: list[dict[str, Any]] = [
         json.loads(line) for line in harness.audit.path.read_text().splitlines()
     ]
     prev = GENESIS_HASH
     for record in records:
-        if record["event"] == "decision":
-            record["body"]["decision"]["action"] = "allow"
+        edit(record)
         record["prev_hash"] = prev
         record["hash"] = prev = record_digest(record)
         record["sig"] = sign_digest(signing_key, record["hash"])
     harness.audit.path.write_text("".join(json.dumps(r) + "\n" for r in records))
 
+
+def test_replay_catches_a_decision_that_does_not_follow_from_its_signals(
+    make_harness: HarnessFactory,
+) -> None:
+    # The chain verifies after the rewrite, but the action no longer follows from the
+    # recorded signals and policy.
+    harness = make_harness()
+    harness.plane.handle("password = S3cretValue!")
+
+    def allow(record: dict[str, Any]) -> None:
+        if record["event"] == "decision":
+            record["body"]["decision"]["action"] = "allow"
+
+    resign_log(harness, allow)
     report = harness.verify()
 
     assert not report.chain_problems
     assert [p.reason for p in report.replay_problems] == [
         "decision replays as block (block-secrets), recorded allow (block-secrets)"
     ]
+
+
+def test_replay_reads_the_signals_from_the_detection_record(
+    make_harness: HarnessFactory,
+) -> None:
+    # Deleting the finding that caused a block, to make the block look unjustified.
+    harness = make_harness()
+    harness.plane.handle("password = S3cretValue!")
+
+    def drop_findings(record: dict[str, Any]) -> None:
+        if record["event"] == "detection":
+            record["body"]["findings"] = []
+
+    resign_log(harness, drop_findings)
+    report = harness.verify()
+
+    assert not report.chain_problems
+    assert [p.reason for p in report.replay_problems] == [
+        "classification replays as no_private_data, recorded contains_private_data"
+    ]
+
+
+def test_decisions_that_kept_their_own_signals_still_replay(make_harness: HarnessFactory) -> None:
+    # Before 2026-11-21 the decision record kept the signals and the detection record a
+    # count of findings. Rebuild that shape from a current log; it must still replay.
+    harness = make_harness()
+    harness.plane.handle(f"Email {EMAIL} about the meeting with {PERSON}.")
+    signals: dict[str, Any] = {}
+
+    def to_older_shape(record: dict[str, Any]) -> None:
+        body = record["body"]
+        if record["event"] == "detection":
+            findings = [{k: v for k, v in f.items() if k != "counted"} for f in body["findings"]]
+            signals.update(detectors=body["detectors"], findings=findings)
+            body["findings"] = len(findings)
+        if record["event"] == "decision":
+            body["signals"] = signals
+
+    resign_log(harness, to_older_shape)
+    report = harness.verify()
+
+    assert report.ok
+    assert report.replayed == 1
 
 
 def test_replay_detects_a_modified_policy_snapshot(make_harness: HarnessFactory) -> None:

@@ -102,7 +102,9 @@ export function PolicyView({ onOpenAuditLog }: Props) {
     setToken("");
   }
 
-  const tokenField = <AdminTokenField token={token} onChange={setToken} />;
+  // With open editing nobody needs a token, so none is asked for.
+  const needsToken = !info.open_editing;
+  const tokenField = needsToken ? <AdminTokenField token={token} onChange={setToken} /> : null;
   const idProblems = draft ? ruleIdProblems(draft.rules) : new Map<number, string>();
   const errors = check?.errors ?? [];
   const draftValid = draft !== null && idProblems.size === 0 && check?.valid === true;
@@ -116,14 +118,17 @@ export function PolicyView({ onOpenAuditLog }: Props) {
             <h2>Policy</h2>
             <p className="hint">
               Every prompt is checked against this policy. A change takes effect on the next
-              request, and each change is signed into the audit log with who made it and why.
+              request, and each change is signed into the audit log with who made it and why.{" "}
+              {info.open_editing
+                ? "On this demo anyone can change it, and “Back to the original policy” always puts the shipped one back."
+                : "Anyone can edit a draft and try it on prompts; only saving it needs the admin token."}
             </p>
           </div>
-          {info.editable && !draft && (
+          {!draft && (
             <div className="toolbar-actions">
-              {(!info.is_default || !info.valid) && (
+              {info.editable && (!info.is_default || !info.valid) && (
                 <button type="button" className="secondary" onClick={() => setPanel("restore")}>
-                  Restore default
+                  Back to the original policy
                 </button>
               )}
               <button
@@ -132,7 +137,7 @@ export function PolicyView({ onOpenAuditLog }: Props) {
                 onClick={startEditing}
                 disabled={!info.document}
               >
-                Edit policy
+                {info.editable ? "Edit policy" : "Try an edit"}
               </button>
             </div>
           )}
@@ -159,7 +164,7 @@ export function PolicyView({ onOpenAuditLog }: Props) {
             <div className="mono">{info.error}</div>
             {info.editable && (
               <button type="button" className="link" onClick={() => setPanel("restore")}>
-                Restore the default policy
+                Back to the original policy
               </button>
             )}
           </div>
@@ -167,8 +172,8 @@ export function PolicyView({ onOpenAuditLog }: Props) {
 
         {!info.editable && (
           <div className="banner banner-info" role="status">
-            The policy is read-only on this server because it has no admin token. Set{" "}
-            <code>SCP_ADMIN_TOKEN</code> to turn editing on.
+            You can edit a draft and try it, but saving is turned off on this server because it
+            has no admin token. Set <code>SCP_ADMIN_TOKEN</code> to turn saving on.
           </div>
         )}
         {saved && (
@@ -204,21 +209,14 @@ export function PolicyView({ onOpenAuditLog }: Props) {
       )}
 
       <div ref={panelRef} className="panel-anchor">
-        {panel === "preview" && draft && (
-          <PolicyPreviewPanel
-            draft={draft}
-            token={token}
-            tokenField={tokenField}
-            onTokenRejected={tokenRejected}
-            onTokenAccepted={() => storeAdminToken(token)}
-          />
-        )}
+        {panel === "preview" && draft && <PolicyPreviewPanel draft={draft} />}
         {panel === "save" && draft && (
           <SavePanel
             draft={draft}
             info={info}
             changes={changes}
-            token={token}
+            token={needsToken ? token : ""}
+            needsToken={needsToken}
             tokenField={tokenField}
             onTokenRejected={tokenRejected}
             onUseVersion={(version) => setDraft({ ...draft, version })}
@@ -233,7 +231,8 @@ export function PolicyView({ onOpenAuditLog }: Props) {
         {panel === "restore" && (
           <RestorePanel
             info={info}
-            token={token}
+            token={needsToken ? token : ""}
+            needsToken={needsToken}
             tokenField={tokenField}
             onTokenRejected={tokenRejected}
             onRestored={(result) => void afterChange(result)}
@@ -265,14 +264,16 @@ export function PolicyView({ onOpenAuditLog }: Props) {
             >
               Try the draft
             </button>
-            <button
-              type="button"
-              className="primary"
-              disabled={!draftValid || changes.length === 0}
-              onClick={() => setPanel("save")}
-            >
-              Save
-            </button>
+            {info.editable && (
+              <button
+                type="button"
+                className="primary"
+                disabled={!draftValid || changes.length === 0}
+                onClick={() => setPanel("save")}
+              >
+                Save
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -348,6 +349,7 @@ function SavePanel({
   info,
   changes,
   token,
+  needsToken,
   tokenField,
   onTokenRejected,
   onUseVersion,
@@ -359,6 +361,7 @@ function SavePanel({
   info: PolicyInfo;
   changes: string[];
   token: string;
+  needsToken: boolean;
   tokenField: ReactNode;
   onTokenRejected: () => void;
   onUseVersion: (version: string) => void;
@@ -408,23 +411,27 @@ function SavePanel({
       )}
       <label className="field">
         <span className="field-label">Why are you changing it? This goes into the audit log.</span>
+        {/* The reason is the one thing left to fill in, so the cursor goes there. */}
         <textarea
           rows={2}
           value={note}
           maxLength={500}
+          required
+          autoFocus
           onChange={(event) => setNote(event.target.value)}
         />
       </label>
       {tokenField}
       {failure && <FailureBanner failure={failure} draft={draft} onReload={onReload} />}
       <div className="panel-actions">
+        {note.trim() === "" && <span className="hint">Write why to save.</span>}
         <button type="button" className="secondary" onClick={onCancel}>
           Cancel
         </button>
         <button
           type="button"
           className="primary"
-          disabled={busy || note.trim() === "" || token === ""}
+          disabled={busy || note.trim() === "" || (needsToken && token === "")}
           onClick={() => void submit()}
         >
           {busy ? "Saving…" : "Save and apply"}
@@ -437,6 +444,7 @@ function SavePanel({
 function RestorePanel({
   info,
   token,
+  needsToken,
   tokenField,
   onTokenRejected,
   onRestored,
@@ -444,12 +452,13 @@ function RestorePanel({
 }: {
   info: PolicyInfo;
   token: string;
+  needsToken: boolean;
   tokenField: ReactNode;
   onTokenRejected: () => void;
   onRestored: (result: PolicyChangeResult) => void;
   onCancel: () => void;
 }) {
-  const [note, setNote] = useState("Restored the default policy.");
+  const [note, setNote] = useState("Back to the original policy.");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ChangeErrorState | null>(null);
 
@@ -467,10 +476,11 @@ function RestorePanel({
 
   return (
     <section className="sheet policy-panel" aria-labelledby="restore-title">
-      <h2 id="restore-title">Restore the default policy</h2>
+      <h2 id="restore-title">Back to the original policy</h2>
       <p className="hint">
-        Puts the policy shipped in <code>policy/policy.yaml</code> back in force. Like any change,
-        it is recorded in the audit log, and the versions before it stay in the history.
+        Puts the original policy, as shipped in <code>policy/policy.yaml</code>, back in force.
+        Like any change, it is recorded in the audit log, and the versions before it stay in the
+        history.
       </p>
       <label className="field">
         <span className="field-label">Note for the audit log</span>
@@ -490,10 +500,10 @@ function RestorePanel({
         <button
           type="button"
           className="primary"
-          disabled={busy || note.trim() === "" || token === ""}
+          disabled={busy || note.trim() === "" || (needsToken && token === "")}
           onClick={() => void submit()}
         >
-          {busy ? "Restoring…" : "Restore default"}
+          {busy ? "Restoring…" : "Back to the original policy"}
         </button>
       </div>
     </section>
@@ -546,7 +556,7 @@ function History({ entries }: { entries: PolicyHistoryEntry[] }) {
             <li key={entry.seq}>
               <header>
                 <strong>
-                  {entry.restored_default ? "Restored the default, " : ""}v{entry.policy.version}
+                  {entry.restored_default ? "Back to the original, " : ""}v{entry.policy.version}
                 </strong>
                 <span className="hint nowrap">{formatDateTime(entry.ts)}</span>
                 <span className="hint mono">{entry.changed_by}</span>

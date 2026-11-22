@@ -18,6 +18,7 @@ from typing import Any
 
 from control_plane.audit.chain import (
     EVENT_DECISION,
+    EVENT_DETECTION,
     EVENT_ERROR,
     EVENT_OUTCOME,
     EVENT_POLICY_CHANGED,
@@ -27,6 +28,7 @@ from control_plane.audit.chain import (
     POLICY_UNAVAILABLE_RULE_ID,
 )
 from control_plane.audit.verify import Report
+from control_plane.evidence import recorded_signals
 from control_plane.models import Label
 from control_plane.policy import DEFAULT_RULE_ID
 from control_plane.providers.base import ProviderStatus
@@ -191,19 +193,7 @@ def _model_alerts(sovereign: ModelState, external: ModelState) -> list[Alert]:
                 "(docker compose logs ollama ollama-pull).",
             )
         )
-    if external.stub:
-        alerts.append(
-            Alert(
-                "external_model_stub",
-                Group.HEALTH,
-                Severity.INFO,
-                "The external model is a stub",
-                "No real external model is called. Allowed and redacted prompts get a "
-                "labelled echo of what would have been sent.",
-                "Set ANTHROPIC_API_KEY if a real external model is intended.",
-            )
-        )
-    elif not external.status.ready:
+    if not external.status.ready:
         alerts.append(
             Alert(
                 "external_model_down",
@@ -333,7 +323,8 @@ _KINDS: dict[str, _Kind] = {
         "Requests interrupted before their outcome",
         "A request was recorded but has no outcome or error, so the process stopped "
         "mid-request. Its last record shows how far it got: a model_call record means a "
-        "model was being called.",
+        "model was being called, and a model_reply record means its answer was back but "
+        "not yet returned.",
         "Check the control plane logs around that time. `make verify` lists them too.",
     ),
     "model_notes": _Kind(
@@ -349,15 +340,21 @@ _KINDS: dict[str, _Kind] = {
 
 @dataclass(frozen=True)
 class _Request:
-    """A decision record and, if one was written, its outcome or error."""
+    """A decision record and, if they were written, its detection and its outcome or error."""
 
     decision: Mapping[str, Any]
     outcome: Mapping[str, Any] | None
     error: Mapping[str, Any] | None = None
+    detection: Mapping[str, Any] | None = None
 
     @property
     def body(self) -> Mapping[str, Any]:
         return self.decision["body"]
+
+    @property
+    def signals(self) -> Mapping[str, Any]:
+        detection = self.detection["body"] if self.detection else None
+        return recorded_signals(self.body, detection) or {}
 
     @property
     def rule_id(self) -> str | None:
@@ -377,7 +374,7 @@ class _Request:
 
     @property
     def entity_types(self) -> tuple[str, ...]:
-        findings = _get(self.body, "signals", "findings") or ()
+        findings = self.signals.get("findings") or ()
         return tuple(sorted({f["entity_type"] for f in findings}))
 
     @property
@@ -450,8 +447,14 @@ def summarize_log(
     """
     outcomes = {r["audit_id"]: r for r in records if r["event"] == EVENT_OUTCOME}
     errors = {r["audit_id"]: r for r in records if r["event"] == EVENT_ERROR}
+    detections = {r["audit_id"]: r for r in records if r["event"] == EVENT_DETECTION}
     requests = [
-        _Request(r, outcomes.get(r["audit_id"]), errors.get(r["audit_id"]))
+        _Request(
+            r,
+            outcomes.get(r["audit_id"]),
+            errors.get(r["audit_id"]),
+            detections.get(r["audit_id"]),
+        )
         for r in records
         if r["event"] == EVENT_DECISION and _ts(r) >= since
     ]
@@ -544,7 +547,7 @@ def _tally_decision(tally: _Tally, request: _Request) -> None:
     for category in request.categories:
         if category in _CATEGORY_KINDS:
             tally.add(_CATEGORY_KINDS[category], request.example())
-    for run in _get(request.body, "signals", "detectors") or ():
+    for run in request.signals.get("detectors") or ():
         if not run.get("ok", True):
             tally.add("detection_failures", request.example(f"{run['name']}:{run.get('error')}"))
 

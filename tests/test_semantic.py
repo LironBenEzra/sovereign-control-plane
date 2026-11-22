@@ -251,7 +251,6 @@ def test_semantic_detection_runs_on_ollama_and_is_off_with_the_stub(
         # Presidio is irrelevant here; an unknown model keeps the test fast.
         spacy_model="not_an_installed_model",
         sovereign_provider=provider,
-        external_provider="stub",
     )
 
     versions = build_services(settings).detectors.versions()

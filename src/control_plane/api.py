@@ -384,7 +384,9 @@ def _add_policy_routes(app: FastAPI, services: Services) -> None:
             "error": error,
             # What a save must name as its starting point, even while the policy is broken.
             "base_sha256": _active_sha256(services.policies),
-            "editable": settings.admin_token_value is not None,
+            "editable": settings.admin_token_value is not None or settings.open_policy_editing,
+            # Anyone may save here, without a token (SCP_OPEN_POLICY_EDITING, a demo setting).
+            "open_editing": settings.open_policy_editing,
             "is_default": policy is not None
             and default is not None
             and policy.sha256 == default.sha256,
@@ -461,9 +463,10 @@ def _add_policy_routes(app: FastAPI, services: Services) -> None:
     async def preview_policy(request: Request) -> dict[str, Any]:
         """What a draft would decide for one prompt, next to the policy in force.
 
-        Admin only: it runs the detectors, including the local model, on any text.
+        Open to anyone, so a draft can be tried without the admin token: it changes nothing,
+        records nothing and calls no model. It runs the detectors on the prompt, which
+        /v1/inference already does for anyone. Saving a draft still needs the token.
         """
-        _require_admin(request, settings)
         preview = PolicyPreviewRequest.model_validate(await _read_json(request))
         if len(preview.prompt) > settings.max_prompt_chars:
             raise HTTPException(status_code=413, detail="The prompt is too long.")
@@ -583,9 +586,13 @@ def _require_admin(request: Request, settings: Settings) -> str:
     """Check the admin token before the body is read. Returns who acted, for the audit log.
 
     The audit log records a fingerprint of the token, never the token: enough to tell a
-    rotated token from the old one.
+    rotated token from the old one. With open editing (a demo setting), a request without
+    a token is allowed and recorded as "visitor"; a wrong token is still refused.
     """
     token = settings.admin_token_value
+    presented_any = bool(request.headers.get("authorization", "").strip())
+    if settings.open_policy_editing and not presented_any:
+        return "visitor"
     if token is None:
         raise HTTPException(
             status_code=403,

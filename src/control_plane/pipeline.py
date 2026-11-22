@@ -1,11 +1,13 @@
 """The request pipeline: one audit record per step, from arrival to outcome.
 
-A request leaves `received`, `detection`, `decision`, `model_call` (only when a model is
-called) and `outcome`, in that order. Three rules shape the order of operations:
+A request leaves `received`, `detection`, `decision`, `model_call` and `model_reply` (only
+when a model is called and answers) and `outcome`, in that order. Three rules shape the
+order of operations:
 
 * Each step is recorded before the next one starts. No detector runs before `received`
-  is durably written, and no model is called before `decision` and `model_call` are.
-  If evidence cannot be written, nothing more happens.
+  is durably written, no model is called before `decision` and `model_call` are, and no
+  answer is returned before `model_reply` is. If evidence cannot be written, nothing
+  more happens.
 * The outcome record is written from what actually happened, after it happened. The log
   never claims an egress that did not take place, and a request with no outcome is a
   visible sign that it was interrupted.
@@ -22,8 +24,8 @@ import time
 import traceback
 import unicodedata
 import uuid
-from collections import Counter
-from collections.abc import Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +34,7 @@ from control_plane.audit.chain import (
     EVENT_DETECTION,
     EVENT_ERROR,
     EVENT_MODEL_CALL,
+    EVENT_MODEL_REPLY,
     EVENT_OUTCOME,
     EVENT_POLICY_CHANGED,
     EVENT_POLICY_LOADED,
@@ -54,7 +57,7 @@ from control_plane.evidence import (
     decision_to_evidence,
     detection_to_evidence,
     policy_to_evidence,
-    signals_to_evidence,
+    reply_to_evidence,
 )
 from control_plane.models import (
     Action,
@@ -227,6 +230,7 @@ class _Attempt:
         reply: ModelReply | None = None,
         error: str | None = None,
         placeholders_restored: int | None = None,
+        restored: Sequence[str] | None = None,
         response: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the outcome record. `sent` is true once the call to the model started."""
@@ -256,6 +260,8 @@ class _Attempt:
                 "spans": self.redaction.span_count,
                 "by_entity": self.redaction.by_entity,
                 "placeholders_restored": placeholders_restored,
+                # Which placeholders had their values put back, never the values themselves.
+                "restored": list(restored) if restored is not None else None,
             }
         return _outcome(
             self.decision,
@@ -268,11 +274,30 @@ class _Attempt:
         )
 
 
-class _OutputScanFailedError(Exception):
-    def __init__(self, errors: dict[str, str]) -> None:
-        super().__init__("the output scan failed")
-        # Detector name -> error class name, for the outcome record.
-        self.errors = errors
+@dataclass(frozen=True)
+class _ReplyScan:
+    """The output scan of one model answer, and the answer with the response rules applied."""
+
+    signals: Signals
+    # The findings at or above the policy's `min_score`.
+    counted: tuple[Finding, ...]
+    # What the response rules took out. Its text is what the caller may be shown.
+    redaction: Redaction
+
+    @property
+    def ok(self) -> bool:
+        return all(run.ok for run in self.signals.detectors)
+
+    def evidence(self, reply: str, *, external: bool) -> dict[str, Any]:
+        """The model_reply record. `external` is true for an answer from outside."""
+        if not self.ok:
+            # The answer is withheld whole: nothing was redacted from it, and it cannot be
+            # masked, so it is not kept.
+            return reply_to_evidence(len(reply), self.signals, self.counted, {}, None)
+        masked = redact(reply, _private(self.counted)).text if external else None
+        return reply_to_evidence(
+            len(reply), self.signals, self.counted, self.redaction.by_entity, masked
+        )
 
 
 class PolicyConflictError(Exception):
@@ -312,6 +337,50 @@ class Preview:
     draft: Verdict
 
 
+# A draft is tried on the same prompts again after every edit, and only the decision
+# changes. Detection is the slow part (the local model takes seconds), so a preview reuses
+# it for a while. An entry holds findings (type, position, score) under a keyed hash of
+# the prompt: never the prompt, never a value.
+PREVIEW_CACHE_TTL_S = 600.0
+PREVIEW_CACHE_SIZE = 256
+
+# The keyed hash of the prompt, the entity types looked for, and the score from which
+# values are masked before the semantic detector reads the prompt.
+_PreviewKey = tuple[str, frozenset[str], float]
+
+
+class SignalsCache:
+    """Detection results by key, kept for a limited time and a limited number of keys."""
+
+    def __init__(
+        self, ttl_s: float, size: int, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._ttl_s = ttl_s
+        self._size = size
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: OrderedDict[_PreviewKey, tuple[float, Signals]] = OrderedDict()
+
+    def get(self, key: _PreviewKey) -> Signals | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            stored_at, signals = entry
+            if self._clock() - stored_at > self._ttl_s:
+                del self._entries[key]
+                return None
+            self._entries.move_to_end(key)
+            return signals
+
+    def put(self, key: _PreviewKey, signals: Signals) -> None:
+        with self._lock:
+            self._entries[key] = (self._clock(), signals)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._size:
+                self._entries.popitem(last=False)
+
+
 class ControlPlane:
     def __init__(
         self,
@@ -333,6 +402,7 @@ class ControlPlane:
         self._policy_state: str | None = None
         # Serializes policy changes, so the version a change replaces is the one checked.
         self._change_lock = threading.Lock()
+        self._preview_signals = SignalsCache(PREVIEW_CACHE_TTL_S, PREVIEW_CACHE_SIZE)
 
     # ------------------------------------------------------------------ entry points
 
@@ -368,7 +438,9 @@ class ControlPlane:
 
             stage = "detection"
             started = time.monotonic()
-            signals = self._detectors.run(text, policy.entity_types)
+            signals = self._detectors.run(
+                text, policy.entity_types, mask_min_score=policy.document.detection.min_score
+            )
             duration_ms = _elapsed_ms(started)
             classification = classify(signals, policy)
             # Masked once, here: the detection record keeps this text, and `redact` sends it.
@@ -376,7 +448,7 @@ class ControlPlane:
             self._append(
                 EVENT_DETECTION,
                 audit_id,
-                detection_to_evidence(signals, masked.text, duration_ms),
+                detection_to_evidence(signals, classification.counted, masked.text, duration_ms),
             )
 
             stage = "decision"
@@ -386,7 +458,6 @@ class ControlPlane:
                 audit_id,
                 {
                     "request": request,
-                    "signals": signals_to_evidence(signals),
                     "classification": classification_to_evidence(classification),
                     "policy": policy_to_evidence(policy),
                     "decision": decision_to_evidence(decision),
@@ -504,7 +575,14 @@ class ControlPlane:
         Detection runs once, for the entity types of both policies; classification
         ignores the types a policy does not list, so each verdict is what that policy
         alone would give. No model is called, nothing is enforced and nothing is recorded:
-        this is a what-if for an administrator, not a request.
+        this is a what-if, open to anyone, not a request.
+
+        Before the semantic detector reads the prompt, values are masked from the lower
+        `min_score` of the two policies, so it never reads a value either one would mask.
+
+        Detection is reused for the same prompt, entity types and masking score for a few
+        minutes, so trying the next edit of a draft only re-decides. A detection in which a
+        detector failed is not reused: it is tried again.
         """
         text = normalize_prompt(prompt)
         try:
@@ -512,7 +590,15 @@ class ControlPlane:
         except PolicyError:
             current = None
         entity_types = set(draft.entity_types) | set(current.entity_types if current else ())
-        signals = self._detectors.run(text, entity_types)
+        mask_min_score = min(
+            p.document.detection.min_score for p in (draft, current) if p is not None
+        )
+        key = (keyed_hash(self._hmac_key, text), frozenset(entity_types), mask_min_score)
+        signals = self._preview_signals.get(key)
+        if signals is None:
+            signals = self._detectors.run(text, entity_types, mask_min_score=mask_min_score)
+            if all(run.ok for run in signals.detectors):
+                self._preview_signals.put(key, signals)
         return Preview(
             signals=signals,
             current=_verdict(signals, current) if current else None,
@@ -599,24 +685,24 @@ class ControlPlane:
                 retryable=True,
             )
 
-        try:
-            scanned, scan = self._scan_output(reply.text, policy)
-        except _OutputScanFailedError as exc:
+        scan = self._scan_output(reply.text, policy)
+        self._append(EVENT_MODEL_REPLY, audit_id, scan.evidence(reply.text, external=external))
+        if not scan.ok:
             status, reason = OutcomeStatus.WITHHELD, "output_scan_failed"
             return _Enforcement(
                 status=status,
                 reason=reason,
-                evidence=attempt.outcome(
-                    status, reason, sent=True, reply=reply, response={"scan_errors": exc.errors}
-                ),
+                evidence=attempt.outcome(status, reason, sent=True, reply=reply),
                 model=used,
                 forwarded_prompt=payload,
                 response=_WITHHELD_MESSAGE,
                 retryable=True,
             )
 
-        output, restored = scanned, None
+        scanned = scan.redaction.text
+        output, restored, put_back = scanned, None, None
         if redaction and policy.document.response.restore_placeholders:
+            put_back = [p for p in redaction.placeholders if p in scanned]
             output, restored = restore(scanned, redaction.placeholders)
 
         return _Enforcement(
@@ -628,7 +714,8 @@ class ControlPlane:
                 sent=True,
                 reply=reply,
                 placeholders_restored=restored,
-                response={"chars": len(output), **scan},
+                restored=put_back,
+                response={"chars": len(output)},
             ),
             model=used,
             forwarded_prompt=payload,
@@ -650,24 +737,22 @@ class ControlPlane:
             logger.error("model call raised an unexpected %s", type(exc).__name__)
             raise ProviderError(f"unexpected_{type(exc).__name__}") from exc
 
-    def _scan_output(self, text: str, policy: Policy) -> tuple[str, dict[str, Any]]:
+    def _scan_output(self, text: str, policy: Policy) -> _ReplyScan:
         """Inspect the model's answer with the same detectors and apply response rules."""
-        signals = self._detectors.run(text, policy.entity_types, skip=_skipped_on_output(policy))
-        if failed := {run.name: run.error or "failed" for run in signals.detectors if not run.ok}:
-            raise _OutputScanFailedError(failed)
-
         document = policy.document
-        counted = [f for f in signals.findings if f.score >= document.detection.min_score]
+        signals = self._detectors.run(
+            text,
+            policy.entity_types,
+            skip=_skipped_on_output(policy),
+            mask_min_score=document.detection.min_score,
+        )
+        counted = tuple(f for f in signals.findings if f.score >= document.detection.min_score)
         to_redact = [
             f
             for f in counted
             if policy.category_of(f.entity_type) in document.response.redact_categories
         ]
-        redaction = redact(text, to_redact)
-        return redaction.text, {
-            "output_findings": dict(sorted(Counter(f.entity_type for f in counted).items())),
-            "output_redactions": redaction.by_entity,
-        }
+        return _ReplyScan(signals, counted, redact(text, to_redact))
 
     # ------------------------------------------------------------------ helpers
 
@@ -695,7 +780,6 @@ class ControlPlane:
             audit_id,
             {
                 "request": request,
-                "signals": signals_to_evidence(signals),
                 "classification": classification_to_evidence(classification),
                 "policy": None,
                 "decision": decision_to_evidence(decision),

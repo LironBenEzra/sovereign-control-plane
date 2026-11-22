@@ -13,7 +13,7 @@ from control_plane.egress import EgressDeniedError, EgressGateway
 from control_plane.models import Action, Decision
 from control_plane.policy import Policy
 from control_plane.providers.anthropic import AnthropicProvider
-from control_plane.providers.base import ProviderError
+from control_plane.providers.base import ProviderError, ProviderStatus
 from control_plane.providers.ollama import OllamaProvider
 from control_plane.providers.stub import StubProvider
 from tests.conftest import FakeProvider
@@ -55,13 +55,13 @@ def test_gateway_cannot_front_an_in_boundary_provider() -> None:
 
 
 def test_stub_is_labelled_as_a_stub_and_shows_what_it_received() -> None:
-    stub = StubProvider("stub-external", in_boundary=False)
+    stub = StubProvider("stub-sovereign", in_boundary=True)
 
     reply = stub.generate("Reply to <PERSON_1>.")
 
     assert stub.is_stub
     assert (
-        reply.text == "[stub-external: no real model was called] I received: Reply to <PERSON_1>."
+        reply.text == "[stub-sovereign: no real model was called] I received: Reply to <PERSON_1>."
     )
 
 
@@ -142,6 +142,15 @@ def test_anthropic_flags_refusals_and_truncation(stop_reason: str, note: str) ->
     messages = FakeMessages(message(stop_reason=stop_reason))
 
     assert provider(messages).generate("p").note == note
+
+
+def test_anthropic_without_a_key_is_not_ready_and_never_sends() -> None:
+    no_key = AnthropicProvider(model="claude-haiku-5-5", timeout_s=5, refusal_fallback=False)
+
+    assert no_key.status() == ProviderStatus(ready=False, detail="No ANTHROPIC_API_KEY is set")
+    with pytest.raises(ProviderError) as raised:
+        no_key.generate("p")
+    assert raised.value.kind == "no_api_key"
 
 
 def _status_error(cls: type[anthropic.APIStatusError], status: int) -> anthropic.APIStatusError:

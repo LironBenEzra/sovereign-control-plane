@@ -2,7 +2,9 @@
 # Host the control plane on one EC2 instance, behind Caddy with HTTPS.
 #
 #   deploy/ec2.sh create     launch the instance once: key pair, security group, Elastic IP
-#   deploy/ec2.sh deploy     copy this working tree to it and (re)build the stack
+#   deploy/ec2.sh deploy     copy this working tree to it and (re)build the stack, with its
+#                            signing key in AWS KMS and secrets in AWS Secrets Manager
+#                            (created the first time)
 #   deploy/ec2.sh status     instance state and the public URL
 #   deploy/ec2.sh ssh        open a shell on the instance
 #   deploy/ec2.sh stop       stop it between reviews (the URL stays the same)
@@ -10,6 +12,11 @@
 #   deploy/ec2.sh destroy    terminate it and delete everything `create` made
 #
 # Uses the AWS CLI's normal credentials, so set AWS_PROFILE to choose an account.
+# The audit log is signed in AWS KMS with alias/scp-demo-audit, an Ed25519 key that never
+# leaves KMS. Every other secret lives in AWS Secrets Manager under scp-demo/: the HMAC
+# key, the admin token, and an Anthropic API key if you store one there. The instance
+# uses them with its own role, which can sign with that key, read those secrets, and
+# nothing else.
 # The site is served at the host names in deploy/ec2.env, if any, and always at
 # <public-ip>.sslip.io, a public DNS name that resolves to that IP, so it works before
 # any domain is set up. Caddy gets an HTTPS certificate for each name.
@@ -24,6 +31,9 @@ INSTANCE_TYPE=${SCP_INSTANCE_TYPE:-m7i-flex.large}
 DISK_GB=40
 KEY_FILE=${SCP_KEY_FILE:-$HOME/.ssh/$NAME.pem}
 REMOTE_DIR=sovereign-control-plane
+SECRETS_PREFIX="$NAME/"
+# Also set in deploy/docker-compose.ec2.yml, where the control plane reads it.
+KMS_ALIAS="alias/$NAME-audit"
 COMPOSE="docker compose -f docker-compose.yml -f deploy/docker-compose.ec2.yml"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -88,8 +98,9 @@ check_dns() {
   ip=$(elastic_ip)
   for name in $DOMAINS; do
     # Resolved from the root servers, not a caching resolver, so a stale record cached
-    # before the A record was added does not block the deploy.
-    dig +trace +nodnssec "$name" A | awk '$4 == "A" {print $5}' | grep -qx "$ip" ||
+    # before the A record was added does not block the deploy. The root servers are asked
+    # of 1.1.1.1, because some routers' resolvers return none and the trace stops there.
+    dig +trace +nodnssec @1.1.1.1 "$name" A | awk '$4 == "A" {print $5}' | grep -qx "$ip" ||
       die "$name does not resolve to $ip yet; add a DNS A record, or remove it from deploy/ec2.env"
   done
 }
@@ -150,7 +161,7 @@ create() {
     --key-name "$NAME" --security-group-ids "$sg" \
     --block-device-mappings \
     "DeviceName=$root_device,Ebs={VolumeSize=$DISK_GB,VolumeType=gp3,Encrypted=true,DeleteOnTermination=true}" \
-    --metadata-options HttpTokens=required,HttpEndpoint=enabled \
+    --metadata-options HttpTokens=required,HttpEndpoint=enabled,HttpPutResponseHopLimit=2 \
     --user-data "file://$ROOT/deploy/ec2-user-data.sh" \
     --tag-specifications \
     "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" \
@@ -187,11 +198,116 @@ deploy() {
     --exclude '*.egg-info' --exclude .DS_Store \
     "$ROOT/" "ubuntu@$(elastic_ip):$REMOTE_DIR/"
 
+  ssh_to "cat >$REMOTE_DIR/.env" <<<"SITE_ADDRESS=\"$site\"
+AWS_REGION=$REGION"
+
+  local key_arn
+  # Assigned on its own line, so a failed lookup stops the deploy under `set -e`.
+  key_arn=$(ensure_kms_key)
+  ensure_instance_role "$key_arn"
+  log "building the image"
+  ssh_to "cd $REMOTE_DIR && sudo $COMPOSE build control-plane"
+  ensure_secrets
+
   log "building and starting the stack for: $site"
-  ssh_to "cat >$REMOTE_DIR/.env" <<<"SITE_ADDRESS=\"$site\""
   ssh_to "cd $REMOTE_DIR && sudo $COMPOSE up -d --build --remove-orphans"
 
   wait_and_warm_up "$host"
+  remove_key_files
+}
+
+# The instance's role: it can sign with the audit key, read this deployment's secrets, and
+# nothing else.
+ensure_instance_role() {
+  local key_arn=$1 id account
+  id=$(instance_id)
+  account=$(aws sts get-caller-identity --query Account --output text)
+  if ! aws iam get-role --role-name "$NAME" >/dev/null 2>&1; then
+    log "creating role $NAME"
+    aws iam create-role --role-name "$NAME" --tags "Key=Name,Value=$NAME" \
+      --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+      >/dev/null
+  fi
+  aws iam put-role-policy --role-name "$NAME" --policy-name read-secrets --policy-document \
+    "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"secretsmanager:GetSecretValue\",\"Resource\":\"arn:aws:secretsmanager:$REGION:$account:secret:$SECRETS_PREFIX*\"}]}"
+  aws iam put-role-policy --role-name "$NAME" --policy-name sign-audit-log --policy-document \
+    "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"kms:Sign\",\"kms:GetPublicKey\"],\"Resource\":\"$key_arn\"}]}"
+  if ! aws iam get-instance-profile --instance-profile-name "$NAME" >/dev/null 2>&1; then
+    aws iam create-instance-profile --instance-profile-name "$NAME" >/dev/null
+    aws iam add-role-to-instance-profile --instance-profile-name "$NAME" --role-name "$NAME"
+  fi
+  if [[ $(aws ec2 describe-iam-instance-profile-associations \
+    --filters "Name=instance-id,Values=$id" "Name=state,Values=associated" \
+    --query 'IamInstanceProfileAssociations[0].AssociationId' --output text) == None ]]; then
+    log "giving instance $id the role $NAME"
+    # A new instance profile takes a few seconds before it can be used.
+    retry 24 aws ec2 associate-iam-instance-profile --instance-id "$id" \
+      --iam-instance-profile "Name=$NAME" || die "could not give the instance its role"
+  fi
+  # The containers reach the role's credentials through IMDSv2, one network hop further.
+  aws ec2 modify-instance-metadata-options --instance-id "$id" --http-tokens required \
+    --http-endpoint enabled --http-put-response-hop-limit 2 >/dev/null
+}
+
+# The audit log's signing key, created once. Prints its ARN. Its private half never
+# leaves KMS; the control plane reads the public half at startup.
+ensure_kms_key() {
+  local arn
+  if arn=$(aws kms describe-key --key-id "$KMS_ALIAS" --query KeyMetadata.Arn --output text 2>&1); then
+    printf '%s' "$arn"
+    return 0
+  fi
+  # Anything but "not found" (no permission, no network) must not create a second key.
+  [[ $arn == *NotFoundException* ]] || die "could not look up $KMS_ALIAS: $arn"
+  log "creating the audit signing key $KMS_ALIAS in AWS KMS"
+  arn=$(aws kms create-key --key-spec ECC_NIST_EDWARDS25519 --key-usage SIGN_VERIFY \
+    --description "$NAME audit log signing key" --query KeyMetadata.Arn --output text)
+  aws kms create-alias --alias-name "$KMS_ALIAS" --target-key-id "$arn"
+  printf '%s' "$arn"
+}
+
+# Each secret is created once. The HMAC key comes from the server's data volume if it
+# has one, so earlier records keep their meaning. An existing secret is never overwritten
+# here; change one in Secrets Manager, then deploy.
+ensure_secrets() {
+  ensure_secret admin-token new_token
+  ensure_secret evidence-hmac-key export_key hmac
+}
+
+ensure_secret() {
+  local name=$SECRETS_PREFIX$1 value
+  shift
+  aws secretsmanager describe-secret --secret-id "$name" >/dev/null 2>&1 && return 0
+  log "creating secret $name"
+  value=$("$@") || die "could not produce a value for $name"
+  [[ -n $value ]] || die "empty value for $name"
+  # printf is a shell builtin, so the value never appears in a process list.
+  printf '%s' "$value" | aws secretsmanager create-secret --name "$name" \
+    --secret-string file:///dev/stdin --tags "Key=Name,Value=$NAME" >/dev/null
+}
+
+new_token() { openssl rand -base64 32 | tr -d '\n'; }
+
+# The key on the server's data volume, or a new one, printed by the control plane's image.
+export_key() {
+  ssh_to "cd $REMOTE_DIR && sudo $COMPOSE run --rm --no-deps -T control-plane \
+    python -m control_plane.audit.keys export $1 --data-dir /app/data"
+}
+
+# Once the stack runs on KMS and the secrets, the private keys leave the server's disk.
+# The HMAC key is compared first, so nothing is deleted that Secrets Manager does not hold.
+remove_key_files() {
+  local on_server stored
+  on_server=$(ssh_to "cd $REMOTE_DIR && sudo $COMPOSE exec -T control-plane sh -c \
+    'test -f data/keys/evidence_hmac.key && base64 -w0 data/keys/evidence_hmac.key || true'")
+  stored=$(aws secretsmanager get-secret-value --secret-id "${SECRETS_PREFIX}evidence-hmac-key" \
+    --query SecretString --output text)
+  if [[ -n $on_server && $on_server != "$stored" ]]; then
+    die "the HMAC key in Secrets Manager differs from the server's; no key file removed"
+  fi
+  ssh_to "cd $REMOTE_DIR && sudo $COMPOSE exec -T control-plane \
+    rm -f data/keys/audit_signing.key data/keys/evidence_hmac.key"
+  log "the server holds no private key: signing is in KMS, the HMAC key in Secrets Manager"
 }
 
 # Wait for the stack, then load the model so the first prompt is not slow.
@@ -224,7 +340,7 @@ status() {
 }
 
 destroy() {
-  read -r -p "Terminate $NAME and delete its Elastic IP, security group and key pair? Type $NAME: " answer
+  read -r -p "Terminate $NAME, delete its Elastic IP, security group and key pair, and schedule its audit signing key for deletion? Type $NAME: " answer
   [[ $answer == "$NAME" ]] || die "not confirmed"
   local id alloc
   id=$(instance_id)
@@ -238,6 +354,13 @@ destroy() {
   aws ec2 delete-security-group --group-name "$NAME" || true
   aws ec2 delete-key-pair --key-name "$NAME" || true
   rm -f "$KEY_FILE"
+  local key
+  if key=$(aws kms describe-key --key-id "$KMS_ALIAS" --query KeyMetadata.KeyId --output text 2>/dev/null); then
+    aws kms delete-alias --alias-name "$KMS_ALIAS"
+    # The longest wait KMS allows. Verifying old logs needs only the public key.
+    aws kms schedule-key-deletion --key-id "$key" --pending-window-in-days 30 >/dev/null
+    log "the audit signing key is deleted in 30 days; aws kms cancel-key-deletion undoes it"
+  fi
   log "destroyed"
 }
 
@@ -249,5 +372,5 @@ case "${1:-}" in
   stop) aws ec2 stop-instances --instance-ids "$(instance_id)" >/dev/null && log "stopping" ;;
   start) start ;;
   destroy) destroy ;;
-  *) sed -n '2,13p' "$0"; exit 1 ;;
+  *) sed -n '2,/^set -euo pipefail$/{/^#/p;}' "$0"; exit 1 ;;
 esac

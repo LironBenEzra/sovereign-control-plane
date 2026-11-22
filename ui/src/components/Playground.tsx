@@ -62,7 +62,7 @@ export function Playground({ onShowEvidence }: Props) {
               <button
                 key={sample.label}
                 type="button"
-                className="sample"
+                className={`sample ${expectTone(sample.expect)}`}
                 onClick={() => setPrompt(sample.prompt)}
               >
                 {sample.label}
@@ -101,14 +101,52 @@ export function Playground({ onShowEvidence }: Props) {
           !busy && (
             <div className="empty">
               <h2>Send a prompt to see what happens to it</h2>
-              <p>
-                The result shows what was found in it, which policy rule decided, what crossed the
-                trust boundary and what stayed inside, and the signed records it left.
-              </p>
+              <div className="empty-map">
+                <div className="empty-inside">
+                  <span className="empty-side">Inside your boundary</span>
+                  <ol className="empty-steps">
+                    {EMPTY_STEPS.map(([title, detail], index) => (
+                      <li key={title}>
+                        <span className="empty-n">{index + 1}</span>
+                        <b>{title}</b>
+                        <span>{detail}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                <div className="empty-outside">
+                  <span className="empty-side">Outside</span>
+                  <b>External model</b>
+                  <span>Gets only what the policy lets out</span>
+                </div>
+              </div>
             </div>
           )
         )}
       </section>
     </div>
   );
+}
+
+// The four steps every result shows, in the same order and words.
+const EMPTY_STEPS: [string, string][] = [
+  ["Inspect", "Find the private data"],
+  ["Decide", "The first rule that matches"],
+  ["Enforce", "Block, keep inside, redact or allow"],
+  ["Audit", "Sign a record of every step"],
+];
+
+// A sample's colour is where its prompt should end up, as everywhere else in the interface.
+function expectTone(expect: string): string {
+  switch (expect) {
+    case "allow":
+      return "act-allow";
+    case "redact":
+      return "act-redact";
+    case "block":
+      return "act-block";
+    default:
+      // "sovereign" and "fail closed" both stay inside.
+      return "act-route_sovereign";
+  }
 }
